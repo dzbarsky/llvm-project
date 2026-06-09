@@ -188,6 +188,7 @@ enum Flag {
   Trap,
   VariadicOpsAreDefs,
   Authenticated,
+  NumFlags,
 };
 } // namespace MCID
 
@@ -203,23 +204,56 @@ public:
   // the <Target>Insts table because they rely on knowing their own address to
   // find other information elsewhere in the same table.
 
-  uint32_t Opcode;         // The opcode number.
-  uint16_t NumOperands;    // Num of args (may be more if variable_ops)
-  uint8_t NumDefs;         // Num of args that are definitions
-  uint8_t Size;            // Number of bytes in encoding.
-  uint16_t SchedClass;     // enum identifying instr sched class
-  uint8_t NumImplicitUses; // Num of regs implicitly used
-  uint8_t NumImplicitDefs; // Num of regs implicitly defined
-  uint16_t OpInfoOffset;   // Offset to info about operands
-  uint16_t ImplicitOffset; // Offset to start of implicit op list
-  uint64_t Flags;          // Flags identifying machine instr class
-  uint64_t TSFlags;        // Target Specific Flag values
+  uint64_t TSFlags; // Target-specific flag values.
+
+private:
+  static constexpr unsigned NumNonDefsFlag = 1U << 5;
+  static constexpr unsigned NumDefsCountMask = NumNonDefsFlag - 1;
+
+  static constexpr unsigned encodeNumDefs(unsigned NumOperands,
+                                          unsigned NumDefs) {
+    unsigned NumNonDefs = NumOperands - NumDefs;
+    return NumDefs <= NumNonDefs ? NumDefs : (NumNonDefsFlag | NumNonDefs);
+  }
+
+  // Store sizes below 64 directly and larger sizes in four-byte units.
+  static constexpr unsigned encodeSize(unsigned Size) {
+    return Size < 64 ? Size : 64 + (Size - 64) / 4;
+  }
+
+  uint64_t Flags : 41;      // Flags identifying machine instruction classes.
+  uint64_t Opcode : 16;     // The opcode number.
+  uint64_t EncodedSize : 7; // The encoded instruction size.
+
+  uint64_t NumOperands : 8;
+  // Store the smaller of the definition and non-definition counts. Bit 5 is
+  // set when bits 0 through 4 contain the non-definition count.
+  uint64_t EncodedNumDefs : 6;
+  uint64_t SchedClass : 13;     // enum identifying instr sched class
+  uint64_t NumImplicitUses : 6; // Num of regs implicitly used
+  uint64_t NumImplicitDefs : 6; // Num of regs implicitly defined
+  uint64_t OpInfoOffset : 15;   // Offset to info about operands
+  uint64_t ImplicitOffset : 10; // Offset to start of implicit op list
+
+public:
+  constexpr MCInstrDesc(uint32_t Opcode = 0, uint16_t NumOperands = 0,
+                        uint8_t NumDefs = 0, uint16_t Size = 0,
+                        uint16_t SchedClass = 0, uint8_t NumImplicitUses = 0,
+                        uint8_t NumImplicitDefs = 0, uint16_t OpInfoOffset = 0,
+                        uint16_t ImplicitOffset = 0, uint64_t Flags = 0,
+                        uint64_t TSFlags = 0)
+      : TSFlags(TSFlags), Flags(Flags), Opcode(Opcode),
+        EncodedSize(encodeSize(Size)), NumOperands(NumOperands),
+        EncodedNumDefs(encodeNumDefs(NumOperands, NumDefs)),
+        SchedClass(SchedClass), NumImplicitUses(NumImplicitUses),
+        NumImplicitDefs(NumImplicitDefs), OpInfoOffset(OpInfoOffset),
+        ImplicitOffset(ImplicitOffset) {}
 
   /// Returns the value of the specified operand constraint if
   /// it is present. Returns -1 if it is not present.
   int getOperandConstraint(unsigned OpNum,
                            MCOI::OperandConstraint Constraint) const {
-    if (OpNum < NumOperands &&
+    if (OpNum < getNumOperands() &&
         (operands()[OpNum].Constraints & (1 << Constraint))) {
       unsigned ValuePos = 4 + Constraint * 4;
       return (int)(operands()[OpNum].Constraints >> ValuePos) & 0x0f;
@@ -239,14 +273,23 @@ public:
 
   ArrayRef<MCOperandInfo> operands() const {
     auto OpInfo = reinterpret_cast<const MCOperandInfo *>(this + Opcode + 1);
-    return ArrayRef(OpInfo + OpInfoOffset, NumOperands);
+    return ArrayRef(OpInfo + OpInfoOffset, getNumOperands());
   }
 
   /// Return the number of MachineOperands that are register
   /// definitions.  Register definitions always occur at the start of the
   /// machine operand list.  This is the number of "outs" in the .td file,
   /// and does not include implicit defs.
-  unsigned getNumDefs() const { return NumDefs; }
+  unsigned getNumDefs() const {
+    unsigned Count = EncodedNumDefs & NumDefsCountMask;
+    return EncodedNumDefs & NumNonDefsFlag ? NumOperands - Count : Count;
+  }
+
+  /// Return the number of implicitly used registers.
+  unsigned getNumImplicitUses() const { return NumImplicitUses; }
+
+  /// Return the number of implicitly defined registers.
+  unsigned getNumImplicitDefs() const { return NumImplicitDefs; }
 
   /// Return flags of this instruction.
   uint64_t getFlags() const { return Flags; }
@@ -604,7 +647,9 @@ public:
 
   /// Return the number of bytes in the encoding of this instruction,
   /// or zero if the encoding size cannot be known from the opcode.
-  unsigned getSize() const { return Size; }
+  unsigned getSize() const {
+    return EncodedSize < 64 ? EncodedSize : 64 + (EncodedSize - 64) * 4;
+  }
 
   /// Find the index of the first operand in the
   /// operand list that is used to represent the predicate. It returns -1 if
@@ -628,6 +673,9 @@ public:
   LLVM_ABI bool hasDefOfPhysReg(const MCInst &MI, MCRegister Reg,
                                 const MCRegisterInfo &RI) const;
 };
+
+static_assert(MCID::NumFlags <= 41);
+static_assert(sizeof(MCInstrDesc) == 24);
 
 } // end namespace llvm
 
