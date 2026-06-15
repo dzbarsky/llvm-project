@@ -1431,19 +1431,20 @@ void InstrInfoEmitter::emitRecord(
   if (!Value)
     PrintFatalError(Inst.TheDef, "Invalid TSFlags bit in " + Inst.getName());
 
-  uint64_t FlagsOpcodeSize =
-      MCInstrDesc::TableGenEncoding::encodeFlagsOpcodeSize(Flags, Num, Size);
-  uint64_t CountsAndOffsets =
-      MCInstrDesc::TableGenEncoding::encodeCountsAndOffsets(
-          MinOperands, DefOperands, SchedClass, Inst.ImplicitUses.size(),
-          Inst.ImplicitDefs.size(), 0, ImplicitOffset);
+  uint64_t FlagsAndImplicit =
+      MCInstrDesc::TableGenEncoding::encodeFlagsAndImplicit(
+          Flags, Size, ImplicitOffset, Inst.ImplicitDefs.size());
+  uint64_t OpcodeAndOperands =
+      MCInstrDesc::TableGenEncoding::encodeOpcodeAndOperands(
+          Num, MinOperands, DefOperands, SchedClass, 0,
+          Inst.ImplicitUses.size());
 
   OS << "    { MCInstrDesc::TableGenEncoding{}, 0x";
   OS.write_hex(*Value);
   OS << "ULL, 0x";
-  OS.write_hex(FlagsOpcodeSize);
+  OS.write_hex(FlagsAndImplicit);
   OS << "ULL, 0x";
-  OS.write_hex(CountsAndOffsets);
+  OS.write_hex(OpcodeAndOperands);
   OS << "ULL | (uint64_t(" << Target.getName() << "OpInfoBase + "
      << OperandInfoOffset
      << ") << MCInstrDesc::TableGenEncoding::OpInfoOffsetShift) },  // "

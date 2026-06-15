@@ -211,16 +211,16 @@ public:
   /// emitting the generated instruction table.
   struct TableGenEncoding {
     static constexpr unsigned FlagsShift = 0;
-    static constexpr unsigned OpcodeShift = 41;
-    static constexpr unsigned SizeShift = 57;
+    static constexpr unsigned SizeShift = 41;
+    static constexpr unsigned ImplicitOffsetShift = 48;
+    static constexpr unsigned NumImplicitDefsShift = 58;
 
-    static constexpr unsigned NumOperandsShift = 0;
-    static constexpr unsigned NumDefsShift = 8;
-    static constexpr unsigned SchedClassShift = 14;
-    static constexpr unsigned NumImplicitUsesShift = 27;
-    static constexpr unsigned NumImplicitDefsShift = 33;
-    static constexpr unsigned OpInfoOffsetShift = 39;
-    static constexpr unsigned ImplicitOffsetShift = 54;
+    static constexpr unsigned OpcodeShift = 0;
+    static constexpr unsigned NumOperandsShift = 16;
+    static constexpr unsigned NumDefsShift = 24;
+    static constexpr unsigned SchedClassShift = 30;
+    static constexpr unsigned OpInfoOffsetShift = 43;
+    static constexpr unsigned NumImplicitUsesShift = 58;
 
     static constexpr uint64_t mask(unsigned BitCount) {
       return (uint64_t(1) << BitCount) - 1;
@@ -237,24 +237,25 @@ public:
       return Size < 64 ? Size : 64 + (Size - 64) / 4;
     }
 
-    static constexpr uint64_t
-    encodeFlagsOpcodeSize(uint64_t Flags, unsigned Opcode, unsigned Size) {
-      return (Flags << FlagsShift) | (uint64_t(Opcode) << OpcodeShift) |
-             (uint64_t(encodeSize(Size)) << SizeShift);
+    static constexpr uint64_t encodeFlagsAndImplicit(uint64_t Flags,
+                                                     unsigned Size,
+                                                     unsigned ImplicitOffset,
+                                                     unsigned NumImplicitDefs) {
+      return (Flags << FlagsShift) | (uint64_t(encodeSize(Size)) << SizeShift) |
+             (uint64_t(ImplicitOffset) << ImplicitOffsetShift) |
+             (uint64_t(NumImplicitDefs) << NumImplicitDefsShift);
     }
 
     static constexpr uint64_t
-    encodeCountsAndOffsets(unsigned NumOperands, unsigned NumDefs,
-                           unsigned SchedClass, unsigned NumImplicitUses,
-                           unsigned NumImplicitDefs, unsigned OpInfoOffset,
-                           unsigned ImplicitOffset) {
-      return (uint64_t(NumOperands) << NumOperandsShift) |
+    encodeOpcodeAndOperands(unsigned Opcode, unsigned NumOperands,
+                            unsigned NumDefs, unsigned SchedClass,
+                            unsigned OpInfoOffset, unsigned NumImplicitUses) {
+      return (uint64_t(Opcode) << OpcodeShift) |
+             (uint64_t(NumOperands) << NumOperandsShift) |
              (uint64_t(encodeNumDefs(NumOperands, NumDefs)) << NumDefsShift) |
              (uint64_t(SchedClass) << SchedClassShift) |
-             (uint64_t(NumImplicitUses) << NumImplicitUsesShift) |
-             (uint64_t(NumImplicitDefs) << NumImplicitDefsShift) |
              (uint64_t(OpInfoOffset) << OpInfoOffsetShift) |
-             (uint64_t(ImplicitOffset) << ImplicitOffsetShift);
+             (uint64_t(NumImplicitUses) << NumImplicitUsesShift);
     }
   };
 
@@ -267,28 +268,28 @@ private:
     return (Value >> Shift) & TableGenEncoding::mask(BitCount);
   }
 
-  uint64_t FlagsOpcodeSize;
-  uint64_t CountsAndOffsets;
+  uint64_t FlagsAndImplicit;
+  uint64_t OpcodeAndOperands;
 
   unsigned getEncodedNumDefs() const {
-    return extract(CountsAndOffsets, TableGenEncoding::NumDefsShift, 6);
+    return extract(OpcodeAndOperands, TableGenEncoding::NumDefsShift, 6);
   }
   unsigned getOpInfoOffset() const {
-    return extract(CountsAndOffsets, TableGenEncoding::OpInfoOffsetShift, 15);
+    return extract(OpcodeAndOperands, TableGenEncoding::OpInfoOffsetShift, 15);
   }
   unsigned getImplicitOffset() const {
-    return extract(CountsAndOffsets, TableGenEncoding::ImplicitOffsetShift, 10);
+    return extract(FlagsAndImplicit, TableGenEncoding::ImplicitOffsetShift, 10);
   }
   bool hasFlag(unsigned Flag) const {
-    return FlagsOpcodeSize & (uint64_t(1) << Flag);
+    return FlagsAndImplicit & (uint64_t(1) << Flag);
   }
 
 public:
   /// Construct an MCInstrDesc encoded by InstrInfoEmitter.
   constexpr MCInstrDesc(TableGenEncoding, uint64_t TSFlags,
-                        uint64_t FlagsOpcodeSize, uint64_t CountsAndOffsets)
-      : TSFlags(TSFlags), FlagsOpcodeSize(FlagsOpcodeSize),
-        CountsAndOffsets(CountsAndOffsets) {}
+                        uint64_t FlagsAndImplicit, uint64_t OpcodeAndOperands)
+      : TSFlags(TSFlags), FlagsAndImplicit(FlagsAndImplicit),
+        OpcodeAndOperands(OpcodeAndOperands) {}
 
   constexpr MCInstrDesc(uint32_t Opcode = 0, uint16_t NumOperands = 0,
                         uint8_t NumDefs = 0, uint16_t Size = 0,
@@ -296,12 +297,12 @@ public:
                         uint8_t NumImplicitDefs = 0, uint16_t OpInfoOffset = 0,
                         uint16_t ImplicitOffset = 0, uint64_t Flags = 0,
                         uint64_t TSFlags = 0)
-      : MCInstrDesc(
-            TableGenEncoding{}, TSFlags,
-            TableGenEncoding::encodeFlagsOpcodeSize(Flags, Opcode, Size),
-            TableGenEncoding::encodeCountsAndOffsets(
-                NumOperands, NumDefs, SchedClass, NumImplicitUses,
-                NumImplicitDefs, OpInfoOffset, ImplicitOffset)) {}
+      : MCInstrDesc(TableGenEncoding{}, TSFlags,
+                    TableGenEncoding::encodeFlagsAndImplicit(
+                        Flags, Size, ImplicitOffset, NumImplicitDefs),
+                    TableGenEncoding::encodeOpcodeAndOperands(
+                        Opcode, NumOperands, NumDefs, SchedClass, OpInfoOffset,
+                        NumImplicitUses)) {}
 
   /// Returns the value of the specified operand constraint if
   /// it is present. Returns -1 if it is not present.
@@ -317,7 +318,7 @@ public:
 
   /// Return the opcode number for this descriptor.
   unsigned getOpcode() const {
-    return extract(FlagsOpcodeSize, TableGenEncoding::OpcodeShift, 16);
+    return extract(OpcodeAndOperands, TableGenEncoding::OpcodeShift, 16);
   }
 
   /// Return the number of declared MachineOperands for this
@@ -326,7 +327,7 @@ public:
   /// that the machine instruction may include implicit register def/uses as
   /// well.
   unsigned getNumOperands() const {
-    return extract(CountsAndOffsets, TableGenEncoding::NumOperandsShift, 8);
+    return extract(OpcodeAndOperands, TableGenEncoding::NumOperandsShift, 8);
   }
 
   ArrayRef<MCOperandInfo> operands() const {
@@ -347,17 +348,18 @@ public:
 
   /// Return the number of implicitly used registers.
   unsigned getNumImplicitUses() const {
-    return extract(CountsAndOffsets, TableGenEncoding::NumImplicitUsesShift, 6);
+    return extract(OpcodeAndOperands, TableGenEncoding::NumImplicitUsesShift,
+                   6);
   }
 
   /// Return the number of implicitly defined registers.
   unsigned getNumImplicitDefs() const {
-    return extract(CountsAndOffsets, TableGenEncoding::NumImplicitDefsShift, 6);
+    return extract(FlagsAndImplicit, TableGenEncoding::NumImplicitDefsShift, 6);
   }
 
   /// Return flags of this instruction.
   uint64_t getFlags() const {
-    return extract(FlagsOpcodeSize, TableGenEncoding::FlagsShift, 41);
+    return extract(FlagsAndImplicit, TableGenEncoding::FlagsShift, 41);
   }
 
   /// \returns true if this instruction is emitted before instruction selection
@@ -703,14 +705,14 @@ public:
   /// returns zero if there is no known scheduling information for the
   /// instruction.
   unsigned getSchedClass() const {
-    return extract(CountsAndOffsets, TableGenEncoding::SchedClassShift, 13);
+    return extract(OpcodeAndOperands, TableGenEncoding::SchedClassShift, 13);
   }
 
   /// Return the number of bytes in the encoding of this instruction,
   /// or zero if the encoding size cannot be known from the opcode.
   unsigned getSize() const {
     unsigned EncodedSize =
-        extract(FlagsOpcodeSize, TableGenEncoding::SizeShift, 7);
+        extract(FlagsAndImplicit, TableGenEncoding::SizeShift, 7);
     return EncodedSize < 64 ? EncodedSize : 64 + (EncodedSize - 64) * 4;
   }
 
