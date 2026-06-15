@@ -25,6 +25,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/SourceMgr.h"
@@ -1327,108 +1328,100 @@ void InstrInfoEmitter::emitRecord(
     PrintFatalError(Inst.TheDef,
                     "implicit register count does not fit in 6 bits");
 
-  OS << "    { ";
-  OS << Num << ",\t" << MinOperands << ",\t" << DefOperands << ",\t" << Size
-     << ",\t" << SchedClass << ",\t";
-
   const CodeGenTarget &Target = CDP.getTargetInfo();
 
-  // Emit the implicit use/def list...
-  OS << Inst.ImplicitUses.size() << ",\t" << Inst.ImplicitDefs.size() << ",\t";
+  // Collect the implicit use/def list.
   std::vector<const Record *> ImplicitOps = Inst.ImplicitUses;
   llvm::append_range(ImplicitOps, Inst.ImplicitDefs);
 
-  // Emit the operand info offset.
   OperandInfoTy OperandInfo = GetOperandInfo(Inst);
-  OS << Target.getName() << "OpInfoBase + "
-     << OperandInfoMap.find(OperandInfo)->second << ",\t";
+  unsigned OperandInfoOffset = OperandInfoMap.find(OperandInfo)->second;
+  unsigned ImplicitOffset = EmittedLists[ImplicitOps];
 
-  // Emit implicit operand base.
-  OS << EmittedLists[ImplicitOps] << ",\t0";
-
-  // Emit all of the target independent flags...
+  // Collect all of the target-independent flags.
+  uint64_t Flags = 0;
   if (Inst.isPreISelOpcode)
-    OS << "|(1ULL<<MCID::PreISelOpcode)";
+    Flags |= 1ULL << MCID::PreISelOpcode;
   if (Inst.isPseudo)
-    OS << "|(1ULL<<MCID::Pseudo)";
+    Flags |= 1ULL << MCID::Pseudo;
   if (Inst.isMeta)
-    OS << "|(1ULL<<MCID::Meta)";
+    Flags |= 1ULL << MCID::Meta;
   if (Inst.isReturn)
-    OS << "|(1ULL<<MCID::Return)";
+    Flags |= 1ULL << MCID::Return;
   if (Inst.isEHScopeReturn)
-    OS << "|(1ULL<<MCID::EHScopeReturn)";
+    Flags |= 1ULL << MCID::EHScopeReturn;
   if (Inst.isBranch)
-    OS << "|(1ULL<<MCID::Branch)";
+    Flags |= 1ULL << MCID::Branch;
   if (Inst.isIndirectBranch)
-    OS << "|(1ULL<<MCID::IndirectBranch)";
+    Flags |= 1ULL << MCID::IndirectBranch;
   if (Inst.isCompare)
-    OS << "|(1ULL<<MCID::Compare)";
+    Flags |= 1ULL << MCID::Compare;
   if (Inst.isMoveImm)
-    OS << "|(1ULL<<MCID::MoveImm)";
+    Flags |= 1ULL << MCID::MoveImm;
   if (Inst.isMoveReg)
-    OS << "|(1ULL<<MCID::MoveReg)";
+    Flags |= 1ULL << MCID::MoveReg;
   if (Inst.isBitcast)
-    OS << "|(1ULL<<MCID::Bitcast)";
+    Flags |= 1ULL << MCID::Bitcast;
   if (Inst.isAdd)
-    OS << "|(1ULL<<MCID::Add)";
+    Flags |= 1ULL << MCID::Add;
   if (Inst.isTrap)
-    OS << "|(1ULL<<MCID::Trap)";
+    Flags |= 1ULL << MCID::Trap;
   if (Inst.isSelect)
-    OS << "|(1ULL<<MCID::Select)";
+    Flags |= 1ULL << MCID::Select;
   if (Inst.isBarrier)
-    OS << "|(1ULL<<MCID::Barrier)";
+    Flags |= 1ULL << MCID::Barrier;
   if (Inst.hasDelaySlot)
-    OS << "|(1ULL<<MCID::DelaySlot)";
+    Flags |= 1ULL << MCID::DelaySlot;
   if (Inst.isCall)
-    OS << "|(1ULL<<MCID::Call)";
+    Flags |= 1ULL << MCID::Call;
   if (Inst.canFoldAsLoad)
-    OS << "|(1ULL<<MCID::FoldableAsLoad)";
+    Flags |= 1ULL << MCID::FoldableAsLoad;
   if (Inst.mayLoad)
-    OS << "|(1ULL<<MCID::MayLoad)";
+    Flags |= 1ULL << MCID::MayLoad;
   if (Inst.mayStore)
-    OS << "|(1ULL<<MCID::MayStore)";
+    Flags |= 1ULL << MCID::MayStore;
   if (Inst.mayRaiseFPException)
-    OS << "|(1ULL<<MCID::MayRaiseFPException)";
+    Flags |= 1ULL << MCID::MayRaiseFPException;
   if (Inst.isPredicable)
-    OS << "|(1ULL<<MCID::Predicable)";
+    Flags |= 1ULL << MCID::Predicable;
   if (Inst.isConvertibleToThreeAddress)
-    OS << "|(1ULL<<MCID::ConvertibleTo3Addr)";
+    Flags |= 1ULL << MCID::ConvertibleTo3Addr;
   if (Inst.isCommutable)
-    OS << "|(1ULL<<MCID::Commutable)";
+    Flags |= 1ULL << MCID::Commutable;
   if (Inst.isTerminator)
-    OS << "|(1ULL<<MCID::Terminator)";
+    Flags |= 1ULL << MCID::Terminator;
   if (Inst.isReMaterializable)
-    OS << "|(1ULL<<MCID::Rematerializable)";
+    Flags |= 1ULL << MCID::Rematerializable;
   if (Inst.isNotDuplicable)
-    OS << "|(1ULL<<MCID::NotDuplicable)";
+    Flags |= 1ULL << MCID::NotDuplicable;
   if (Inst.Operands.hasOptionalDef)
-    OS << "|(1ULL<<MCID::HasOptionalDef)";
+    Flags |= 1ULL << MCID::HasOptionalDef;
   if (Inst.usesCustomInserter)
-    OS << "|(1ULL<<MCID::UsesCustomInserter)";
+    Flags |= 1ULL << MCID::UsesCustomInserter;
   if (Inst.hasPostISelHook)
-    OS << "|(1ULL<<MCID::HasPostISelHook)";
+    Flags |= 1ULL << MCID::HasPostISelHook;
   if (Inst.Operands.isVariadic)
-    OS << "|(1ULL<<MCID::Variadic)";
+    Flags |= 1ULL << MCID::Variadic;
   if (Inst.hasSideEffects)
-    OS << "|(1ULL<<MCID::UnmodeledSideEffects)";
+    Flags |= 1ULL << MCID::UnmodeledSideEffects;
   if (Inst.isAsCheapAsAMove)
-    OS << "|(1ULL<<MCID::CheapAsAMove)";
+    Flags |= 1ULL << MCID::CheapAsAMove;
   if (!Target.getAllowRegisterRenaming() || Inst.hasExtraSrcRegAllocReq)
-    OS << "|(1ULL<<MCID::ExtraSrcRegAllocReq)";
+    Flags |= 1ULL << MCID::ExtraSrcRegAllocReq;
   if (!Target.getAllowRegisterRenaming() || Inst.hasExtraDefRegAllocReq)
-    OS << "|(1ULL<<MCID::ExtraDefRegAllocReq)";
+    Flags |= 1ULL << MCID::ExtraDefRegAllocReq;
   if (Inst.isRegSequence)
-    OS << "|(1ULL<<MCID::RegSequence)";
+    Flags |= 1ULL << MCID::RegSequence;
   if (Inst.isExtractSubreg)
-    OS << "|(1ULL<<MCID::ExtractSubreg)";
+    Flags |= 1ULL << MCID::ExtractSubreg;
   if (Inst.isInsertSubreg)
-    OS << "|(1ULL<<MCID::InsertSubreg)";
+    Flags |= 1ULL << MCID::InsertSubreg;
   if (Inst.isConvergent)
-    OS << "|(1ULL<<MCID::Convergent)";
+    Flags |= 1ULL << MCID::Convergent;
   if (Inst.variadicOpsAreDefs)
-    OS << "|(1ULL<<MCID::VariadicOpsAreDefs)";
+    Flags |= 1ULL << MCID::VariadicOpsAreDefs;
   if (Inst.isAuthenticated)
-    OS << "|(1ULL<<MCID::Authenticated)";
+    Flags |= 1ULL << MCID::Authenticated;
 
   // Emit all of the target-specific flags...
   const BitsInit *TSF = Inst.TheDef->getValueAsBitsInit("TSFlags");
@@ -1438,11 +1431,23 @@ void InstrInfoEmitter::emitRecord(
   if (!Value)
     PrintFatalError(Inst.TheDef, "Invalid TSFlags bit in " + Inst.getName());
 
-  OS << ", 0x";
-  OS.write_hex(*Value);
-  OS << "ULL";
+  uint64_t FlagsOpcodeSize =
+      MCInstrDesc::TableGenEncoding::encodeFlagsOpcodeSize(Flags, Num, Size);
+  uint64_t CountsAndOffsets =
+      MCInstrDesc::TableGenEncoding::encodeCountsAndOffsets(
+          MinOperands, DefOperands, SchedClass, Inst.ImplicitUses.size(),
+          Inst.ImplicitDefs.size(), 0, ImplicitOffset);
 
-  OS << " },  // " << Inst.getName() << '\n';
+  OS << "    { MCInstrDesc::TableGenEncoding{}, 0x";
+  OS.write_hex(*Value);
+  OS << "ULL, 0x";
+  OS.write_hex(FlagsOpcodeSize);
+  OS << "ULL, 0x";
+  OS.write_hex(CountsAndOffsets);
+  OS << "ULL | (uint64_t(" << Target.getName() << "OpInfoBase + "
+     << OperandInfoOffset
+     << ") << MCInstrDesc::TableGenEncoding::OpInfoOffsetShift) },  // "
+     << Inst.getName() << '\n';
 }
 
 // emitEnums - Print out enum values for all of the instructions.
