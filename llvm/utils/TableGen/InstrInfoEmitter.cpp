@@ -25,7 +25,6 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/SourceMgr.h"
@@ -35,7 +34,6 @@
 #include "llvm/TableGen/Record.h"
 #include "llvm/TableGen/TGTimer.h"
 #include "llvm/TableGen/TableGenBackend.h"
-#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <iterator>
@@ -952,8 +950,6 @@ void InstrInfoEmitter::run(raw_ostream &OS) {
       ImplicitListSize += ImplicitOps.size();
     }
   }
-  if (!isUInt<10>(ImplicitListSize))
-    PrintFatalError("implicit operand table does not fit in 10-bit offsets");
 
   {
     IfGuardEmitter IfGuard(
@@ -1006,10 +1002,7 @@ void InstrInfoEmitter::run(raw_ostream &OS) {
        << "InstrTable::Padding) % sizeof(MCOperandInfo) == 0);\n";
     OS << "static constexpr unsigned " << TargetName << "OpInfoBase = (sizeof "
        << TargetName << "InstrTable::ImplicitOps + sizeof " << TargetName
-       << "InstrTable::Padding) / sizeof(MCOperandInfo);\n";
-    OS << "static_assert(" << TargetName << "OpInfoBase + " << OperandInfoSize
-       << " <= (1U << 15), "
-          "\"operand info table does not fit in 15-bit offsets\");\n\n";
+       << "InstrTable::Padding) / sizeof(MCOperandInfo);\n\n";
 
     OS << "extern const " << TargetName << "InstrTable " << TargetName
        << "Descs = {\n  {\n";
@@ -1302,126 +1295,109 @@ void InstrInfoEmitter::emitRecord(
     DefOperands = Opnd.MIOperandNo + Opnd.MINumOperands;
   }
 
-  int64_t Size = Inst.TheDef->getValueAsInt("Size");
-  unsigned SchedClass = SchedModels.getSchedClassIdx(Inst);
-  if (!isUInt<16>(Num))
-    PrintFatalError(Inst.TheDef, "instruction opcode does not fit in 16 bits");
-  if (!isUInt<8>(MinOperands))
-    PrintFatalError(Inst.TheDef,
-                    "instruction operand count does not fit in 8 bits");
-  if (DefOperands > MinOperands)
-    PrintFatalError(Inst.TheDef,
-                    "instruction definition count exceeds operand count");
-  if (!isUInt<5>(std::min(DefOperands, MinOperands - DefOperands)))
-    PrintFatalError(
-        Inst.TheDef,
-        "instruction must have at most 31 definitions or at most 31 "
-        "non-definitions");
-  if (Size < 0 || (Size >= 64 && (Size > 316 || Size % 4 != 0)))
-    PrintFatalError(Inst.TheDef,
-                    "instruction size cannot be encoded in 7 bits");
-  if (!isUInt<13>(SchedClass))
-    PrintFatalError(Inst.TheDef,
-                    "instruction scheduling class does not fit in 13 bits");
-  if (!isUInt<6>(Inst.ImplicitUses.size()) ||
-      !isUInt<6>(Inst.ImplicitDefs.size()))
-    PrintFatalError(Inst.TheDef,
-                    "implicit register count does not fit in 6 bits");
+  OS << "    { ";
+  OS << Num << ",\t" << MinOperands << ",\t" << DefOperands << ",\t"
+     << Inst.TheDef->getValueAsInt("Size") << ",\t"
+     << SchedModels.getSchedClassIdx(Inst) << ",\t";
 
   const CodeGenTarget &Target = CDP.getTargetInfo();
 
-  // Collect the implicit use/def list.
+  // Emit the implicit use/def list...
+  OS << Inst.ImplicitUses.size() << ",\t" << Inst.ImplicitDefs.size() << ",\t";
   std::vector<const Record *> ImplicitOps = Inst.ImplicitUses;
   llvm::append_range(ImplicitOps, Inst.ImplicitDefs);
 
+  // Emit the operand info offset.
   OperandInfoTy OperandInfo = GetOperandInfo(Inst);
-  unsigned OperandInfoOffset = OperandInfoMap.find(OperandInfo)->second;
-  unsigned ImplicitOffset = EmittedLists[ImplicitOps];
+  OS << Target.getName() << "OpInfoBase + "
+     << OperandInfoMap.find(OperandInfo)->second << ",\t";
 
-  // Collect all of the target-independent flags.
-  uint64_t Flags = 0;
+  // Emit implicit operand base.
+  OS << EmittedLists[ImplicitOps] << ",\t0";
+
+  // Emit all of the target independent flags...
   if (Inst.isPreISelOpcode)
-    Flags |= 1ULL << MCID::PreISelOpcode;
+    OS << "|(1ULL<<MCID::PreISelOpcode)";
   if (Inst.isPseudo)
-    Flags |= 1ULL << MCID::Pseudo;
+    OS << "|(1ULL<<MCID::Pseudo)";
   if (Inst.isMeta)
-    Flags |= 1ULL << MCID::Meta;
+    OS << "|(1ULL<<MCID::Meta)";
   if (Inst.isReturn)
-    Flags |= 1ULL << MCID::Return;
+    OS << "|(1ULL<<MCID::Return)";
   if (Inst.isEHScopeReturn)
-    Flags |= 1ULL << MCID::EHScopeReturn;
+    OS << "|(1ULL<<MCID::EHScopeReturn)";
   if (Inst.isBranch)
-    Flags |= 1ULL << MCID::Branch;
+    OS << "|(1ULL<<MCID::Branch)";
   if (Inst.isIndirectBranch)
-    Flags |= 1ULL << MCID::IndirectBranch;
+    OS << "|(1ULL<<MCID::IndirectBranch)";
   if (Inst.isCompare)
-    Flags |= 1ULL << MCID::Compare;
+    OS << "|(1ULL<<MCID::Compare)";
   if (Inst.isMoveImm)
-    Flags |= 1ULL << MCID::MoveImm;
+    OS << "|(1ULL<<MCID::MoveImm)";
   if (Inst.isMoveReg)
-    Flags |= 1ULL << MCID::MoveReg;
+    OS << "|(1ULL<<MCID::MoveReg)";
   if (Inst.isBitcast)
-    Flags |= 1ULL << MCID::Bitcast;
+    OS << "|(1ULL<<MCID::Bitcast)";
   if (Inst.isAdd)
-    Flags |= 1ULL << MCID::Add;
+    OS << "|(1ULL<<MCID::Add)";
   if (Inst.isTrap)
-    Flags |= 1ULL << MCID::Trap;
+    OS << "|(1ULL<<MCID::Trap)";
   if (Inst.isSelect)
-    Flags |= 1ULL << MCID::Select;
+    OS << "|(1ULL<<MCID::Select)";
   if (Inst.isBarrier)
-    Flags |= 1ULL << MCID::Barrier;
+    OS << "|(1ULL<<MCID::Barrier)";
   if (Inst.hasDelaySlot)
-    Flags |= 1ULL << MCID::DelaySlot;
+    OS << "|(1ULL<<MCID::DelaySlot)";
   if (Inst.isCall)
-    Flags |= 1ULL << MCID::Call;
+    OS << "|(1ULL<<MCID::Call)";
   if (Inst.canFoldAsLoad)
-    Flags |= 1ULL << MCID::FoldableAsLoad;
+    OS << "|(1ULL<<MCID::FoldableAsLoad)";
   if (Inst.mayLoad)
-    Flags |= 1ULL << MCID::MayLoad;
+    OS << "|(1ULL<<MCID::MayLoad)";
   if (Inst.mayStore)
-    Flags |= 1ULL << MCID::MayStore;
+    OS << "|(1ULL<<MCID::MayStore)";
   if (Inst.mayRaiseFPException)
-    Flags |= 1ULL << MCID::MayRaiseFPException;
+    OS << "|(1ULL<<MCID::MayRaiseFPException)";
   if (Inst.isPredicable)
-    Flags |= 1ULL << MCID::Predicable;
+    OS << "|(1ULL<<MCID::Predicable)";
   if (Inst.isConvertibleToThreeAddress)
-    Flags |= 1ULL << MCID::ConvertibleTo3Addr;
+    OS << "|(1ULL<<MCID::ConvertibleTo3Addr)";
   if (Inst.isCommutable)
-    Flags |= 1ULL << MCID::Commutable;
+    OS << "|(1ULL<<MCID::Commutable)";
   if (Inst.isTerminator)
-    Flags |= 1ULL << MCID::Terminator;
+    OS << "|(1ULL<<MCID::Terminator)";
   if (Inst.isReMaterializable)
-    Flags |= 1ULL << MCID::Rematerializable;
+    OS << "|(1ULL<<MCID::Rematerializable)";
   if (Inst.isNotDuplicable)
-    Flags |= 1ULL << MCID::NotDuplicable;
+    OS << "|(1ULL<<MCID::NotDuplicable)";
   if (Inst.Operands.hasOptionalDef)
-    Flags |= 1ULL << MCID::HasOptionalDef;
+    OS << "|(1ULL<<MCID::HasOptionalDef)";
   if (Inst.usesCustomInserter)
-    Flags |= 1ULL << MCID::UsesCustomInserter;
+    OS << "|(1ULL<<MCID::UsesCustomInserter)";
   if (Inst.hasPostISelHook)
-    Flags |= 1ULL << MCID::HasPostISelHook;
+    OS << "|(1ULL<<MCID::HasPostISelHook)";
   if (Inst.Operands.isVariadic)
-    Flags |= 1ULL << MCID::Variadic;
+    OS << "|(1ULL<<MCID::Variadic)";
   if (Inst.hasSideEffects)
-    Flags |= 1ULL << MCID::UnmodeledSideEffects;
+    OS << "|(1ULL<<MCID::UnmodeledSideEffects)";
   if (Inst.isAsCheapAsAMove)
-    Flags |= 1ULL << MCID::CheapAsAMove;
+    OS << "|(1ULL<<MCID::CheapAsAMove)";
   if (!Target.getAllowRegisterRenaming() || Inst.hasExtraSrcRegAllocReq)
-    Flags |= 1ULL << MCID::ExtraSrcRegAllocReq;
+    OS << "|(1ULL<<MCID::ExtraSrcRegAllocReq)";
   if (!Target.getAllowRegisterRenaming() || Inst.hasExtraDefRegAllocReq)
-    Flags |= 1ULL << MCID::ExtraDefRegAllocReq;
+    OS << "|(1ULL<<MCID::ExtraDefRegAllocReq)";
   if (Inst.isRegSequence)
-    Flags |= 1ULL << MCID::RegSequence;
+    OS << "|(1ULL<<MCID::RegSequence)";
   if (Inst.isExtractSubreg)
-    Flags |= 1ULL << MCID::ExtractSubreg;
+    OS << "|(1ULL<<MCID::ExtractSubreg)";
   if (Inst.isInsertSubreg)
-    Flags |= 1ULL << MCID::InsertSubreg;
+    OS << "|(1ULL<<MCID::InsertSubreg)";
   if (Inst.isConvergent)
-    Flags |= 1ULL << MCID::Convergent;
+    OS << "|(1ULL<<MCID::Convergent)";
   if (Inst.variadicOpsAreDefs)
-    Flags |= 1ULL << MCID::VariadicOpsAreDefs;
+    OS << "|(1ULL<<MCID::VariadicOpsAreDefs)";
   if (Inst.isAuthenticated)
-    Flags |= 1ULL << MCID::Authenticated;
+    OS << "|(1ULL<<MCID::Authenticated)";
 
   // Emit all of the target-specific flags...
   const BitsInit *TSF = Inst.TheDef->getValueAsBitsInit("TSFlags");
@@ -1431,24 +1407,11 @@ void InstrInfoEmitter::emitRecord(
   if (!Value)
     PrintFatalError(Inst.TheDef, "Invalid TSFlags bit in " + Inst.getName());
 
-  uint64_t FlagsAndImplicit =
-      MCInstrDesc::TableGenEncoding::encodeFlagsAndImplicit(
-          Flags, Size, ImplicitOffset, Inst.ImplicitDefs.size());
-  uint64_t OpcodeAndOperands =
-      MCInstrDesc::TableGenEncoding::encodeOpcodeAndOperands(
-          Num, MinOperands, DefOperands, SchedClass, 0,
-          Inst.ImplicitUses.size());
-
-  OS << "    { MCInstrDesc::TableGenEncoding{}, 0x";
+  OS << ", 0x";
   OS.write_hex(*Value);
-  OS << "ULL, 0x";
-  OS.write_hex(FlagsAndImplicit);
-  OS << "ULL, 0x";
-  OS.write_hex(OpcodeAndOperands);
-  OS << "ULL | (uint64_t(" << Target.getName() << "OpInfoBase + "
-     << OperandInfoOffset
-     << ") << MCInstrDesc::TableGenEncoding::OpInfoOffsetShift) },  // "
-     << Inst.getName() << '\n';
+  OS << "ULL";
+
+  OS << " },  // " << Inst.getName() << '\n';
 }
 
 // emitEnums - Print out enum values for all of the instructions.

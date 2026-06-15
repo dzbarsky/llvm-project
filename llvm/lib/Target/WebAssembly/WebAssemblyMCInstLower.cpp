@@ -234,8 +234,7 @@ void WebAssemblyMCInstLower::lower(const MachineInstr *MI,
       // Currently this is the only way that CImmediates show up so panic if we
       // get confused.
       unsigned DescIndex = I - NumVariadicDefs;
-      assert(DescIndex < Desc.getNumOperands() &&
-             "unexpected CImmediate operand");
+      assert(DescIndex < Desc.NumOperands && "unexpected CImmediate operand");
       auto Operands = Desc.operands();
       const MCOperandInfo &Info = Operands[DescIndex];
       assert(Info.OperandType == WebAssembly::OPERAND_TYPEINDEX &&
@@ -246,7 +245,7 @@ void WebAssemblyMCInstLower::lower(const MachineInstr *MI,
     }
     case MachineOperand::MO_Immediate: {
       unsigned DescIndex = I - NumVariadicDefs;
-      if (DescIndex < Desc.getNumOperands()) {
+      if (DescIndex < Desc.NumOperands) {
         auto Operands = Desc.operands();
         const MCOperandInfo &Info = Operands[DescIndex];
         // Replace type index placeholder with actual type index. The type index

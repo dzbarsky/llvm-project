@@ -86,8 +86,8 @@ bool RISCVPushPopOpt::usePopRet(MachineBasicBlock::iterator &MBBI,
   // on what register list has been picked during frame lowering.
   const MCInstrDesc &PopDesc = MBBI->getDesc();
   unsigned FirstNonDeclaredOp = PopDesc.getNumOperands() +
-                                PopDesc.getNumImplicitUses() +
-                                PopDesc.getNumImplicitDefs();
+                                PopDesc.NumImplicitUses +
+                                PopDesc.NumImplicitDefs;
   for (unsigned i = FirstNonDeclaredOp; i < MBBI->getNumOperands(); ++i)
     PopRetBuilder.add(MBBI->getOperand(i));
 

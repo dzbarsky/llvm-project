@@ -6242,7 +6242,7 @@ DecodeStatus ARMDisassembler::getARMInstruction(MCInst &MI, uint64_t &Size,
 
 bool ARMDisassembler::isVectorPredicable(const MCInst &MI) const {
   const MCInstrDesc &MCID = MCII->get(MI.getOpcode());
-  for (unsigned i = 0; i < MCID.getNumOperands(); ++i) {
+  for (unsigned i = 0; i < MCID.NumOperands; ++i) {
     if (ARM::isVpred(MCID.operands()[i].OperandType))
       return true;
   }
@@ -6332,7 +6332,7 @@ void ARMDisassembler::UpdateThumbPredicate(DecodeStatus &S, MCInst &MI) const {
   const MCInstrDesc &MCID = MCII->get(MI.getOpcode());
   ArrayRef<MCOperandInfo> OpInfo = MCID.operands();
   MCInst::iterator I = MI.begin();
-  unsigned short NumOps = MCID.getNumOperands();
+  unsigned short NumOps = MCID.NumOperands;
   for (unsigned i = 0; i < NumOps; ++i, ++I) {
     if (OpInfo[i].isPredicate() ) {
       if (CC != ARMCC::AL && !MCID.isPredicable())

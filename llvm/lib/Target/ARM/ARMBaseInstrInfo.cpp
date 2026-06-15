@@ -4282,7 +4282,7 @@ ARMBaseInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
 
   const MCInstrDesc &DefMCID = get(DefNode->getMachineOpcode());
 
-  if (isZeroCost(DefMCID.getOpcode()))
+  if (isZeroCost(DefMCID.Opcode))
     return 0;
 
   if (!ItinData || ItinData->isEmpty())

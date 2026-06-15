@@ -144,8 +144,8 @@ public:
 namespace MCID {
 /// These should be considered private to the implementation of the
 /// MCInstrDesc class.  Clients should use the predicate methods on MCInstrDesc,
-/// not use these directly. These all correspond to bits returned by
-/// MCInstrDesc::getFlags().
+/// not use these directly.  These all correspond to bitfields in the
+/// MCInstrDesc::Flags field.
 enum Flag {
   PreISelOpcode = 0,
   Variadic,
@@ -188,7 +188,6 @@ enum Flag {
   Trap,
   VariadicOpsAreDefs,
   Authenticated,
-  NumFlags,
 };
 } // namespace MCID
 
@@ -204,111 +203,23 @@ public:
   // the <Target>Insts table because they rely on knowing their own address to
   // find other information elsewhere in the same table.
 
-  uint64_t TSFlags; // Target-specific flag values.
-
-  /// Defines the MCInstrDesc representation emitted by InstrInfoEmitter.
-  /// InstrInfoEmitter uses this interface to encode each MCInstrDesc before
-  /// emitting the generated instruction table.
-  struct TableGenEncoding {
-    static constexpr unsigned FlagsShift = 0;
-    static constexpr unsigned SizeShift = 41;
-    static constexpr unsigned ImplicitOffsetShift = 48;
-    static constexpr unsigned NumImplicitDefsShift = 58;
-
-    static constexpr unsigned OpcodeShift = 0;
-    static constexpr unsigned NumOperandsShift = 16;
-    static constexpr unsigned NumDefsShift = 24;
-    static constexpr unsigned SchedClassShift = 30;
-    static constexpr unsigned OpInfoOffsetShift = 43;
-    static constexpr unsigned NumImplicitUsesShift = 58;
-
-    static constexpr uint64_t mask(unsigned BitCount) {
-      return (uint64_t(1) << BitCount) - 1;
-    }
-
-    static constexpr unsigned encodeNumDefs(unsigned NumOperands,
-                                            unsigned NumDefs) {
-      unsigned NumNonDefs = NumOperands - NumDefs;
-      return NumDefs <= NumNonDefs ? NumDefs : (1U << 5) | NumNonDefs;
-    }
-
-    // Store sizes below 64 directly and larger sizes in four-byte units.
-    static constexpr unsigned encodeSize(unsigned Size) {
-      return Size < 64 ? Size : 64 + (Size - 64) / 4;
-    }
-
-    static constexpr uint64_t encodeFlagsAndImplicit(uint64_t Flags,
-                                                     unsigned Size,
-                                                     unsigned ImplicitOffset,
-                                                     unsigned NumImplicitDefs) {
-      return (Flags << FlagsShift) | (uint64_t(encodeSize(Size)) << SizeShift) |
-             (uint64_t(ImplicitOffset) << ImplicitOffsetShift) |
-             (uint64_t(NumImplicitDefs) << NumImplicitDefsShift);
-    }
-
-    static constexpr uint64_t
-    encodeOpcodeAndOperands(unsigned Opcode, unsigned NumOperands,
-                            unsigned NumDefs, unsigned SchedClass,
-                            unsigned OpInfoOffset, unsigned NumImplicitUses) {
-      return (uint64_t(Opcode) << OpcodeShift) |
-             (uint64_t(NumOperands) << NumOperandsShift) |
-             (uint64_t(encodeNumDefs(NumOperands, NumDefs)) << NumDefsShift) |
-             (uint64_t(SchedClass) << SchedClassShift) |
-             (uint64_t(OpInfoOffset) << OpInfoOffsetShift) |
-             (uint64_t(NumImplicitUses) << NumImplicitUsesShift);
-    }
-  };
-
-private:
-  static constexpr unsigned NumNonDefsFlag = 1U << 5;
-  static constexpr unsigned NumDefsCountMask = NumNonDefsFlag - 1;
-
-  static constexpr uint64_t extract(uint64_t Value, unsigned Shift,
-                                    unsigned BitCount) {
-    return (Value >> Shift) & TableGenEncoding::mask(BitCount);
-  }
-
-  uint64_t FlagsAndImplicit;
-  uint64_t OpcodeAndOperands;
-
-  unsigned getEncodedNumDefs() const {
-    return extract(OpcodeAndOperands, TableGenEncoding::NumDefsShift, 6);
-  }
-  unsigned getOpInfoOffset() const {
-    return extract(OpcodeAndOperands, TableGenEncoding::OpInfoOffsetShift, 15);
-  }
-  unsigned getImplicitOffset() const {
-    return extract(FlagsAndImplicit, TableGenEncoding::ImplicitOffsetShift, 10);
-  }
-  bool hasFlag(unsigned Flag) const {
-    return FlagsAndImplicit & (uint64_t(1) << Flag);
-  }
-
-public:
-  /// Construct an MCInstrDesc encoded by InstrInfoEmitter.
-  constexpr MCInstrDesc(TableGenEncoding, uint64_t TSFlags,
-                        uint64_t FlagsAndImplicit, uint64_t OpcodeAndOperands)
-      : TSFlags(TSFlags), FlagsAndImplicit(FlagsAndImplicit),
-        OpcodeAndOperands(OpcodeAndOperands) {}
-
-  constexpr MCInstrDesc(uint32_t Opcode = 0, uint16_t NumOperands = 0,
-                        uint8_t NumDefs = 0, uint16_t Size = 0,
-                        uint16_t SchedClass = 0, uint8_t NumImplicitUses = 0,
-                        uint8_t NumImplicitDefs = 0, uint16_t OpInfoOffset = 0,
-                        uint16_t ImplicitOffset = 0, uint64_t Flags = 0,
-                        uint64_t TSFlags = 0)
-      : MCInstrDesc(TableGenEncoding{}, TSFlags,
-                    TableGenEncoding::encodeFlagsAndImplicit(
-                        Flags, Size, ImplicitOffset, NumImplicitDefs),
-                    TableGenEncoding::encodeOpcodeAndOperands(
-                        Opcode, NumOperands, NumDefs, SchedClass, OpInfoOffset,
-                        NumImplicitUses)) {}
+  uint32_t Opcode;         // The opcode number.
+  uint16_t NumOperands;    // Num of args (may be more if variable_ops)
+  uint8_t NumDefs;         // Num of args that are definitions
+  uint8_t Size;            // Number of bytes in encoding.
+  uint16_t SchedClass;     // enum identifying instr sched class
+  uint8_t NumImplicitUses; // Num of regs implicitly used
+  uint8_t NumImplicitDefs; // Num of regs implicitly defined
+  uint16_t OpInfoOffset;   // Offset to info about operands
+  uint16_t ImplicitOffset; // Offset to start of implicit op list
+  uint64_t Flags;          // Flags identifying machine instr class
+  uint64_t TSFlags;        // Target Specific Flag values
 
   /// Returns the value of the specified operand constraint if
   /// it is present. Returns -1 if it is not present.
   int getOperandConstraint(unsigned OpNum,
                            MCOI::OperandConstraint Constraint) const {
-    if (OpNum < getNumOperands() &&
+    if (OpNum < NumOperands &&
         (operands()[OpNum].Constraints & (1 << Constraint))) {
       unsigned ValuePos = 4 + Constraint * 4;
       return (int)(operands()[OpNum].Constraints >> ValuePos) & 0x0f;
@@ -317,92 +228,70 @@ public:
   }
 
   /// Return the opcode number for this descriptor.
-  unsigned getOpcode() const {
-    return extract(OpcodeAndOperands, TableGenEncoding::OpcodeShift, 16);
-  }
+  unsigned getOpcode() const { return Opcode; }
 
   /// Return the number of declared MachineOperands for this
   /// MachineInstruction.  Note that variadic (isVariadic() returns true)
   /// instructions may have additional operands at the end of the list, and note
   /// that the machine instruction may include implicit register def/uses as
   /// well.
-  unsigned getNumOperands() const {
-    return extract(OpcodeAndOperands, TableGenEncoding::NumOperandsShift, 8);
-  }
+  unsigned getNumOperands() const { return NumOperands; }
 
   ArrayRef<MCOperandInfo> operands() const {
-    auto OpInfo =
-        reinterpret_cast<const MCOperandInfo *>(this + getOpcode() + 1);
-    return ArrayRef(OpInfo + getOpInfoOffset(), getNumOperands());
+    auto OpInfo = reinterpret_cast<const MCOperandInfo *>(this + Opcode + 1);
+    return ArrayRef(OpInfo + OpInfoOffset, NumOperands);
   }
 
   /// Return the number of MachineOperands that are register
   /// definitions.  Register definitions always occur at the start of the
   /// machine operand list.  This is the number of "outs" in the .td file,
   /// and does not include implicit defs.
-  unsigned getNumDefs() const {
-    unsigned EncodedNumDefs = getEncodedNumDefs();
-    unsigned Count = EncodedNumDefs & NumDefsCountMask;
-    return EncodedNumDefs & NumNonDefsFlag ? getNumOperands() - Count : Count;
-  }
-
-  /// Return the number of implicitly used registers.
-  unsigned getNumImplicitUses() const {
-    return extract(OpcodeAndOperands, TableGenEncoding::NumImplicitUsesShift,
-                   6);
-  }
-
-  /// Return the number of implicitly defined registers.
-  unsigned getNumImplicitDefs() const {
-    return extract(FlagsAndImplicit, TableGenEncoding::NumImplicitDefsShift, 6);
-  }
+  unsigned getNumDefs() const { return NumDefs; }
 
   /// Return flags of this instruction.
-  uint64_t getFlags() const {
-    return extract(FlagsAndImplicit, TableGenEncoding::FlagsShift, 41);
-  }
+  uint64_t getFlags() const { return Flags; }
 
   /// \returns true if this instruction is emitted before instruction selection
   /// and should be legalized/regbankselected/selected.
-  bool isPreISelOpcode() const { return hasFlag(MCID::PreISelOpcode); }
+  bool isPreISelOpcode() const { return Flags & (1ULL << MCID::PreISelOpcode); }
 
   /// Return true if this instruction can have a variable number of
   /// operands.  In this case, the variable operands will be after the normal
   /// operands but before the implicit definitions and uses (if any are
   /// present).
-  bool isVariadic() const { return hasFlag(MCID::Variadic); }
+  bool isVariadic() const { return Flags & (1ULL << MCID::Variadic); }
 
   /// Set if this instruction has an optional definition, e.g.
   /// ARM instructions which can set condition code if 's' bit is set.
-  bool hasOptionalDef() const { return hasFlag(MCID::HasOptionalDef); }
+  bool hasOptionalDef() const { return Flags & (1ULL << MCID::HasOptionalDef); }
 
   /// Return true if this is a pseudo instruction that doesn't
   /// correspond to a real machine instruction.
-  bool isPseudo() const { return hasFlag(MCID::Pseudo); }
+  bool isPseudo() const { return Flags & (1ULL << MCID::Pseudo); }
 
   /// Return true if this is a meta instruction that doesn't
   /// produce any output in the form of executable instructions.
-  bool isMetaInstruction() const { return hasFlag(MCID::Meta); }
+  bool isMetaInstruction() const { return Flags & (1ULL << MCID::Meta); }
 
   /// Return true if the instruction is a return.
-  bool isReturn() const { return hasFlag(MCID::Return); }
+  bool isReturn() const { return Flags & (1ULL << MCID::Return); }
 
   /// Return true if the instruction is an add instruction.
-  bool isAdd() const { return hasFlag(MCID::Add); }
+  bool isAdd() const { return Flags & (1ULL << MCID::Add); }
 
   /// Return true if this instruction is a trap.
-  bool isTrap() const { return hasFlag(MCID::Trap); }
+  bool isTrap() const { return Flags & (1ULL << MCID::Trap); }
 
   /// Return true if the instruction is a register to register move.
-  bool isMoveReg() const { return hasFlag(MCID::MoveReg); }
+  bool isMoveReg() const { return Flags & (1ULL << MCID::MoveReg); }
 
   ///  Return true if the instruction is a call.
-  bool isCall() const { return hasFlag(MCID::Call); }
+  bool isCall() const { return Flags & (1ULL << MCID::Call); }
 
   /// Returns true if the specified instruction stops control flow
   /// from executing the instruction immediately following it.  Examples include
   /// unconditional branches and return instructions.
-  bool isBarrier() const { return hasFlag(MCID::Barrier); }
+  bool isBarrier() const { return Flags & (1ULL << MCID::Barrier); }
 
   /// Returns true if this instruction part of the terminator for
   /// a basic block.  Typically this is things like return and branch
@@ -410,17 +299,17 @@ public:
   ///
   /// Various passes use this to insert code into the bottom of a basic block,
   /// but before control flow occurs.
-  bool isTerminator() const { return hasFlag(MCID::Terminator); }
+  bool isTerminator() const { return Flags & (1ULL << MCID::Terminator); }
 
   /// Returns true if this is a conditional, unconditional, or
   /// indirect branch.  Predicates below can be used to discriminate between
   /// these cases, and the TargetInstrInfo::analyzeBranch method can be used to
   /// get more information.
-  bool isBranch() const { return hasFlag(MCID::Branch); }
+  bool isBranch() const { return Flags & (1ULL << MCID::Branch); }
 
   /// Return true if this is an indirect branch, such as a
   /// branch through a register.
-  bool isIndirectBranch() const { return hasFlag(MCID::IndirectBranch); }
+  bool isIndirectBranch() const { return Flags & (1ULL << MCID::IndirectBranch); }
 
   /// Return true if this is a branch which may fall
   /// through to the next instruction or may transfer control flow to some other
@@ -448,29 +337,29 @@ public:
   /// that controls execution. It may be set to 'always', or may be set to other
   /// values. There are various methods in TargetInstrInfo that can be used to
   /// control and modify the predicate in this instruction.
-  bool isPredicable() const { return hasFlag(MCID::Predicable); }
+  bool isPredicable() const { return Flags & (1ULL << MCID::Predicable); }
 
   /// Return true if this instruction is a comparison.
-  bool isCompare() const { return hasFlag(MCID::Compare); }
+  bool isCompare() const { return Flags & (1ULL << MCID::Compare); }
 
   /// Return true if this instruction is a move immediate
   /// (including conditional moves) instruction.
-  bool isMoveImmediate() const { return hasFlag(MCID::MoveImm); }
+  bool isMoveImmediate() const { return Flags & (1ULL << MCID::MoveImm); }
 
   /// Return true if this instruction is a bitcast instruction.
-  bool isBitcast() const { return hasFlag(MCID::Bitcast); }
+  bool isBitcast() const { return Flags & (1ULL << MCID::Bitcast); }
 
   /// Return true if this is a select instruction.
-  bool isSelect() const { return hasFlag(MCID::Select); }
+  bool isSelect() const { return Flags & (1ULL << MCID::Select); }
 
   /// Return true if this instruction cannot be safely
   /// duplicated.  For example, if the instruction has a unique labels attached
   /// to it, duplicating it would cause multiple definition errors.
-  bool isNotDuplicable() const { return hasFlag(MCID::NotDuplicable); }
+  bool isNotDuplicable() const { return Flags & (1ULL << MCID::NotDuplicable); }
 
   /// Returns true if the specified instruction has a delay slot which
   /// must be filled by the code generator.
-  bool hasDelaySlot() const { return hasFlag(MCID::DelaySlot); }
+  bool hasDelaySlot() const { return Flags & (1ULL << MCID::DelaySlot); }
 
   /// Return true for instructions that can be folded as memory operands
   /// in other instructions. The most common use for this is instructions that
@@ -479,7 +368,7 @@ public:
   /// constant-pool loads, such as V_SETALLONES on x86, to allow them to be
   /// folded when it is beneficial.  This should only be set on instructions
   /// that return a value in their only virtual register definition.
-  bool canFoldAsLoad() const { return hasFlag(MCID::FoldableAsLoad); }
+  bool canFoldAsLoad() const { return Flags & (1ULL << MCID::FoldableAsLoad); }
 
   /// Return true if this instruction behaves
   /// the same way as the generic REG_SEQUENCE instructions.
@@ -491,7 +380,7 @@ public:
   /// Note that for the optimizers to be able to take advantage of
   /// this property, TargetInstrInfo::getRegSequenceLikeInputs has to be
   /// override accordingly.
-  bool isRegSequenceLike() const { return hasFlag(MCID::RegSequence); }
+  bool isRegSequenceLike() const { return Flags & (1ULL << MCID::RegSequence); }
 
   /// Return true if this instruction behaves
   /// the same way as the generic EXTRACT_SUBREG instructions.
@@ -504,7 +393,9 @@ public:
   /// Note that for the optimizers to be able to take advantage of
   /// this property, TargetInstrInfo::getExtractSubregLikeInputs has to be
   /// override accordingly.
-  bool isExtractSubregLike() const { return hasFlag(MCID::ExtractSubreg); }
+  bool isExtractSubregLike() const {
+    return Flags & (1ULL << MCID::ExtractSubreg);
+  }
 
   /// Return true if this instruction behaves
   /// the same way as the generic INSERT_SUBREG instructions.
@@ -516,23 +407,28 @@ public:
   /// Note that for the optimizers to be able to take advantage of
   /// this property, TargetInstrInfo::getInsertSubregLikeInputs has to be
   /// override accordingly.
-  bool isInsertSubregLike() const { return hasFlag(MCID::InsertSubreg); }
+  bool isInsertSubregLike() const { return Flags & (1ULL << MCID::InsertSubreg); }
+
 
   /// Return true if this instruction is convergent.
   ///
   /// Convergent instructions may not be made control-dependent on any
   /// additional values.
-  bool isConvergent() const { return hasFlag(MCID::Convergent); }
+  bool isConvergent() const { return Flags & (1ULL << MCID::Convergent); }
 
   /// Return true if variadic operands of this instruction are definitions.
-  bool variadicOpsAreDefs() const { return hasFlag(MCID::VariadicOpsAreDefs); }
+  bool variadicOpsAreDefs() const {
+    return Flags & (1ULL << MCID::VariadicOpsAreDefs);
+  }
 
   /// Return true if this instruction authenticates a pointer (e.g. LDRAx/BRAx
   /// from ARMv8.3, which perform loads/branches with authentication).
   ///
   /// An authenticated instruction may fail in an ABI-defined manner when
   /// operating on an invalid signed pointer.
-  bool isAuthenticated() const { return hasFlag(MCID::Authenticated); }
+  bool isAuthenticated() const {
+    return Flags & (1ULL << MCID::Authenticated);
+  }
 
   //===--------------------------------------------------------------------===//
   // Side Effect Analysis
@@ -541,17 +437,17 @@ public:
   /// Return true if this instruction could possibly read memory.
   /// Instructions with this flag set are not necessarily simple load
   /// instructions, they may load a value and modify it, for example.
-  bool mayLoad() const { return hasFlag(MCID::MayLoad); }
+  bool mayLoad() const { return Flags & (1ULL << MCID::MayLoad); }
 
   /// Return true if this instruction could possibly modify memory.
   /// Instructions with this flag set are not necessarily simple store
   /// instructions, they may store a modified value based on their operands, or
   /// may not actually modify anything, for example.
-  bool mayStore() const { return hasFlag(MCID::MayStore); }
+  bool mayStore() const { return Flags & (1ULL << MCID::MayStore); }
 
   /// Return true if this instruction may raise a floating-point exception.
   bool mayRaiseFPException() const {
-    return hasFlag(MCID::MayRaiseFPException);
+    return Flags & (1ULL << MCID::MayRaiseFPException);
   }
 
   /// Return true if this instruction has side
@@ -567,7 +463,7 @@ public:
   /// a control register, flushing a cache, modifying a register invisible to
   /// LLVM, etc.
   bool hasUnmodeledSideEffects() const {
-    return hasFlag(MCID::UnmodeledSideEffects);
+    return Flags & (1ULL << MCID::UnmodeledSideEffects);
   }
 
   //===--------------------------------------------------------------------===//
@@ -584,7 +480,7 @@ public:
   /// sometimes.  In these cases, the call to commuteInstruction will fail.
   /// Also note that some instructions require non-trivial modification to
   /// commute them.
-  bool isCommutable() const { return hasFlag(MCID::Commutable); }
+  bool isCommutable() const { return Flags & (1ULL << MCID::Commutable); }
 
   /// Return true if this is a 2-address instruction which can be changed
   /// into a 3-address instruction if needed.  Doing this transformation can be
@@ -601,7 +497,7 @@ public:
   /// instruction (e.g. shl reg, 4 on x86).
   ///
   bool isConvertibleTo3Addr() const {
-    return hasFlag(MCID::ConvertibleTo3Addr);
+    return Flags & (1ULL << MCID::ConvertibleTo3Addr);
   }
 
   /// Return true if this instruction requires custom insertion support
@@ -613,21 +509,23 @@ public:
   /// If this is true, the TargetLoweringInfo::InsertAtEndOfBasicBlock method
   /// is used to insert this into the MachineBasicBlock.
   bool usesCustomInsertionHook() const {
-    return hasFlag(MCID::UsesCustomInserter);
+    return Flags & (1ULL << MCID::UsesCustomInserter);
   }
 
   /// Return true if this instruction requires *adjustment* after
   /// instruction selection by calling a target hook. For example, this can be
   /// used to fill in ARM 's' optional operand depending on whether the
   /// conditional flag register is used.
-  bool hasPostISelHook() const { return hasFlag(MCID::HasPostISelHook); }
+  bool hasPostISelHook() const { return Flags & (1ULL << MCID::HasPostISelHook); }
 
   /// Returns true if this instruction is a candidate for remat. This
   /// flag is only used in TargetInstrInfo method isTriviallyRematerializable.
   ///
   /// If this flag is set, the isReMaterializableImpl() method is
   /// called to verify the instruction is really rematerializable.
-  bool isRematerializable() const { return hasFlag(MCID::Rematerializable); }
+  bool isRematerializable() const {
+    return Flags & (1ULL << MCID::Rematerializable);
+  }
 
   /// Returns true if this instruction has the same cost (or less) than a
   /// move instruction. This is useful during certain types of optimizations
@@ -638,7 +536,7 @@ public:
   ///
   /// This method could be called by interface TargetInstrInfo::isAsCheapAsAMove
   /// for different subtargets.
-  bool isAsCheapAsAMove() const { return hasFlag(MCID::CheapAsAMove); }
+  bool isAsCheapAsAMove() const { return Flags & (1ULL << MCID::CheapAsAMove); }
 
   /// Returns true if this instruction source operands have special
   /// register allocation requirements that are not captured by the operand
@@ -647,7 +545,7 @@ public:
   /// allocation passes should not attempt to change allocations for sources of
   /// instructions with this flag.
   bool hasExtraSrcRegAllocReq() const {
-    return hasFlag(MCID::ExtraSrcRegAllocReq);
+    return Flags & (1ULL << MCID::ExtraSrcRegAllocReq);
   }
 
   /// Returns true if this instruction def operands have special register
@@ -657,7 +555,7 @@ public:
   /// allocation passes should not attempt to change allocations for definitions
   /// of instructions with this flag.
   bool hasExtraDefRegAllocReq() const {
-    return hasFlag(MCID::ExtraDefRegAllocReq);
+    return Flags & (1ULL << MCID::ExtraDefRegAllocReq);
   }
 
   /// Return a list of registers that are potentially read by any
@@ -668,9 +566,8 @@ public:
   /// marked as implicitly reading the 'CL' register, which it always does.
   ArrayRef<MCPhysReg> implicit_uses() const {
     auto ImplicitOps =
-        reinterpret_cast<const MCPhysReg *>(this + getOpcode() + 1) +
-        getImplicitOffset();
-    return {ImplicitOps, getNumImplicitUses()};
+        reinterpret_cast<const MCPhysReg *>(this + Opcode + 1) + ImplicitOffset;
+    return {ImplicitOps, NumImplicitUses};
   }
 
   /// Return a list of registers that are potentially written by any
@@ -683,9 +580,8 @@ public:
   /// EAX/EDX/EFLAGS registers.
   ArrayRef<MCPhysReg> implicit_defs() const {
     auto ImplicitOps =
-        reinterpret_cast<const MCPhysReg *>(this + getOpcode() + 1) +
-        getImplicitOffset();
-    return {ImplicitOps + getNumImplicitUses(), getNumImplicitDefs()};
+        reinterpret_cast<const MCPhysReg *>(this + Opcode + 1) + ImplicitOffset;
+    return {ImplicitOps + NumImplicitUses, NumImplicitDefs};
   }
 
   /// Return true if this instruction implicitly
@@ -704,17 +600,11 @@ public:
   /// scheduling class is an index into the InstrItineraryData table.  This
   /// returns zero if there is no known scheduling information for the
   /// instruction.
-  unsigned getSchedClass() const {
-    return extract(OpcodeAndOperands, TableGenEncoding::SchedClassShift, 13);
-  }
+  unsigned getSchedClass() const { return SchedClass; }
 
   /// Return the number of bytes in the encoding of this instruction,
   /// or zero if the encoding size cannot be known from the opcode.
-  unsigned getSize() const {
-    unsigned EncodedSize =
-        extract(FlagsAndImplicit, TableGenEncoding::SizeShift, 7);
-    return EncodedSize < 64 ? EncodedSize : 64 + (EncodedSize - 64) * 4;
-  }
+  unsigned getSize() const { return Size; }
 
   /// Find the index of the first operand in the
   /// operand list that is used to represent the predicate. It returns -1 if
@@ -738,9 +628,6 @@ public:
   LLVM_ABI bool hasDefOfPhysReg(const MCInst &MI, MCRegister Reg,
                                 const MCRegisterInfo &RI) const;
 };
-
-static_assert(MCID::NumFlags <= 41);
-static_assert(sizeof(MCInstrDesc) == 24);
 
 } // end namespace llvm
 

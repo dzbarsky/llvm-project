@@ -65,7 +65,7 @@ bool InstructionTemplate::hasImmediateVariables() const {
 
 MCInst InstructionTemplate::build() const {
   MCInst Result;
-  Result.setOpcode(Instr->getOpcode());
+  Result.setOpcode(Instr->Description.Opcode);
   for (const auto &Op : Instr->Operands)
     if (Op.isExplicit())
       Result.addOperand(getValueFor(Op));

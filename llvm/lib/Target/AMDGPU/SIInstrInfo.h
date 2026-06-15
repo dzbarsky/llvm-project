@@ -1316,8 +1316,8 @@ public:
                         const MachineOperand &UseMO,
                         const MachineOperand &DefMO) const {
     assert(UseMO.getParent() == &MI);
-    unsigned OpIdx = UseMO.getOperandNo();
-    if (OpIdx >= MI.getDesc().getNumOperands())
+    int OpIdx = UseMO.getOperandNo();
+    if (OpIdx >= MI.getDesc().NumOperands)
       return false;
 
     return isInlineConstant(DefMO, MI.getDesc().operands()[OpIdx]);
@@ -1332,7 +1332,7 @@ public:
 
   bool isInlineConstant(const MachineInstr &MI, unsigned OpIdx,
                         int64_t ImmVal) const {
-    if (OpIdx >= MI.getDesc().getNumOperands())
+    if (OpIdx >= MI.getDesc().NumOperands)
       return false;
 
     if (isCopyInstr(MI)) {
