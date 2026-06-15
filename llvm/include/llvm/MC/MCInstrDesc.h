@@ -228,8 +228,8 @@ public:
 
     static constexpr unsigned encodeNumDefs(unsigned NumOperands,
                                             unsigned NumDefs) {
-      unsigned NumNonDefs = NumOperands - NumDefs;
-      return NumDefs <= NumNonDefs ? NumDefs : (1U << 5) | NumNonDefs;
+      return NumDefs < (1U << 5) ? NumDefs
+                                 : (1U << 5) | (NumOperands - NumDefs);
     }
 
     // Store sizes below 64 directly and larger sizes in four-byte units.
@@ -261,11 +261,20 @@ public:
 
 private:
   static constexpr unsigned NumNonDefsFlag = 1U << 5;
-  static constexpr unsigned NumDefsCountMask = NumNonDefsFlag - 1;
 
   static constexpr uint64_t extract(uint64_t Value, unsigned Shift,
                                     unsigned BitCount) {
     return (Value >> Shift) & TableGenEncoding::mask(BitCount);
+  }
+
+  LLVM_ATTRIBUTE_NOINLINE static unsigned
+  decodeNumDefsFromNumNonDefs(unsigned NumOperands, unsigned EncodedNumDefs) {
+    return NumOperands - (EncodedNumDefs - NumNonDefsFlag);
+  }
+
+  LLVM_ATTRIBUTE_NOINLINE static unsigned
+  decodeLargeSize(unsigned EncodedSize) {
+    return 64 + (EncodedSize - 64) * 4;
   }
 
   uint64_t FlagsAndImplicit;
@@ -342,8 +351,9 @@ public:
   /// and does not include implicit defs.
   unsigned getNumDefs() const {
     unsigned EncodedNumDefs = getEncodedNumDefs();
-    unsigned Count = EncodedNumDefs & NumDefsCountMask;
-    return EncodedNumDefs & NumNonDefsFlag ? getNumOperands() - Count : Count;
+    if (LLVM_UNLIKELY(EncodedNumDefs >= NumNonDefsFlag))
+      return decodeNumDefsFromNumNonDefs(getNumOperands(), EncodedNumDefs);
+    return EncodedNumDefs;
   }
 
   /// Return the number of implicitly used registers.
@@ -713,7 +723,9 @@ public:
   unsigned getSize() const {
     unsigned EncodedSize =
         extract(FlagsAndImplicit, TableGenEncoding::SizeShift, 7);
-    return EncodedSize < 64 ? EncodedSize : 64 + (EncodedSize - 64) * 4;
+    if (LLVM_UNLIKELY(EncodedSize >= 64))
+      return decodeLargeSize(EncodedSize);
+    return EncodedSize;
   }
 
   /// Find the index of the first operand in the
