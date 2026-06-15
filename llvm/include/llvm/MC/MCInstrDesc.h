@@ -211,16 +211,16 @@ public:
   /// emitting the generated instruction table.
   struct TableGenEncoding {
     static constexpr unsigned FlagsShift = 0;
-    static constexpr unsigned SizeShift = 41;
-    static constexpr unsigned ImplicitOffsetShift = 48;
-    static constexpr unsigned NumImplicitDefsShift = 58;
+    static constexpr unsigned ImplicitOffsetShift = 41;
+    static constexpr unsigned NumImplicitDefsShift = 51;
+    static constexpr unsigned SizeShift = 57;
 
     static constexpr unsigned OpcodeShift = 0;
     static constexpr unsigned NumOperandsShift = 16;
     static constexpr unsigned NumDefsShift = 24;
     static constexpr unsigned SchedClassShift = 30;
-    static constexpr unsigned OpInfoOffsetShift = 43;
-    static constexpr unsigned NumImplicitUsesShift = 58;
+    static constexpr unsigned NumImplicitUsesShift = 43;
+    static constexpr unsigned OpInfoOffsetShift = 49;
 
     static constexpr uint64_t mask(unsigned BitCount) {
       return (uint64_t(1) << BitCount) - 1;
