@@ -228,8 +228,8 @@ public:
 
     static constexpr unsigned encodeNumDefs(unsigned NumOperands,
                                             unsigned NumDefs) {
-      return NumDefs < (1U << 5) ? NumDefs
-                                 : (1U << 5) | (NumOperands - NumDefs);
+      unsigned NumNonDefs = NumOperands - NumDefs;
+      return NumDefs <= NumNonDefs ? NumDefs : (1U << 5) | NumNonDefs;
     }
 
     // Store sizes below 64 directly and larger sizes in four-byte units.
@@ -261,15 +261,11 @@ public:
 
 private:
   static constexpr unsigned NumNonDefsFlag = 1U << 5;
+  static constexpr unsigned NumDefsCountMask = NumNonDefsFlag - 1;
 
   static constexpr uint64_t extract(uint64_t Value, unsigned Shift,
                                     unsigned BitCount) {
     return (Value >> Shift) & TableGenEncoding::mask(BitCount);
-  }
-
-  LLVM_ATTRIBUTE_NOINLINE static unsigned
-  decodeNumDefsFromNumNonDefs(unsigned NumOperands, unsigned EncodedNumDefs) {
-    return NumOperands - (EncodedNumDefs - NumNonDefsFlag);
   }
 
   LLVM_ATTRIBUTE_NOINLINE static unsigned
@@ -351,9 +347,8 @@ public:
   /// and does not include implicit defs.
   unsigned getNumDefs() const {
     unsigned EncodedNumDefs = getEncodedNumDefs();
-    if (LLVM_UNLIKELY(EncodedNumDefs >= NumNonDefsFlag))
-      return decodeNumDefsFromNumNonDefs(getNumOperands(), EncodedNumDefs);
-    return EncodedNumDefs;
+    unsigned Count = EncodedNumDefs & NumDefsCountMask;
+    return EncodedNumDefs & NumNonDefsFlag ? getNumOperands() - Count : Count;
   }
 
   /// Return the number of implicitly used registers.
