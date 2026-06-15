@@ -73,6 +73,8 @@ private:
   using OperandInfoTy = std::vector<std::string>;
   using OperandInfoListTy = std::vector<OperandInfoTy>;
   using OperandInfoMapTy = std::map<OperandInfoTy, unsigned>;
+  using ImplicitListTy = std::pair<unsigned, std::vector<const Record *>>;
+  using ImplicitListMapTy = std::map<ImplicitListTy, unsigned>;
 
   DenseMap<const CodeGenInstruction *, const CodeGenInstruction *>
       TargetSpecializedPseudoInsts;
@@ -96,8 +98,7 @@ private:
   /// Write verifyInstructionPredicates methods.
   void emitFeatureVerifier(raw_ostream &OS, const CodeGenTarget &Target);
   void emitRecord(const CodeGenInstruction &Inst, unsigned Num,
-                  const Record *InstrInfo,
-                  std::map<std::vector<const Record *>, unsigned> &EL,
+                  const Record *InstrInfo, ImplicitListMapTy &EmittedLists,
                   const OperandInfoMapTy &OperandInfo, raw_ostream &OS);
   void emitOperandTypeMappings(
       raw_ostream &OS, const CodeGenTarget &Target,
@@ -936,24 +937,34 @@ void InstrInfoEmitter::run(raw_ostream &OS) {
   bool HasUseNamedOperandTable = false;
 
   Timer.startTimer("Collect uses/defs");
-  std::map<std::vector<const Record *>, unsigned> EmittedLists;
-  std::vector<std::vector<const Record *>> ImplicitLists;
-  unsigned ImplicitListSize = 0;
+  ImplicitListMapTy EmittedLists;
+  std::vector<ImplicitListTy> ImplicitLists;
+  ImplicitListTy EmptyImplicitList{0, {}};
+  EmittedLists.emplace(EmptyImplicitList, 0);
+  ImplicitLists.push_back(EmptyImplicitList);
+  unsigned ImplicitListSize = 1;
   for (const CodeGenInstruction *Inst : NumberedInstructions) {
     HasUseLogicalOperandMappings |=
         Inst->TheDef->getValueAsBit("UseLogicalOperandMappings");
     HasUseNamedOperandTable |=
         Inst->TheDef->getValueAsBit("UseNamedOperandTable");
 
-    std::vector<const Record *> ImplicitOps = Inst->ImplicitUses;
-    llvm::append_range(ImplicitOps, Inst->ImplicitDefs);
-    if (EmittedLists.try_emplace(ImplicitOps, ImplicitListSize).second) {
-      ImplicitLists.push_back(ImplicitOps);
-      ImplicitListSize += ImplicitOps.size();
+    const CodeGenInstruction *EffectiveInst = Inst;
+    auto OverrideEntry = TargetSpecializedPseudoInsts.find(Inst);
+    if (OverrideEntry != TargetSpecializedPseudoInsts.end())
+      EffectiveInst = OverrideEntry->second;
+
+    std::vector<const Record *> ImplicitOps = EffectiveInst->ImplicitUses;
+    llvm::append_range(ImplicitOps, EffectiveInst->ImplicitDefs);
+    ImplicitListTy ImplicitList{EffectiveInst->ImplicitUses.size(),
+                                std::move(ImplicitOps)};
+    if (EmittedLists.try_emplace(ImplicitList, ImplicitListSize).second) {
+      ImplicitListSize += 1 + ImplicitList.second.size();
+      ImplicitLists.push_back(std::move(ImplicitList));
     }
   }
-  if (!isUInt<10>(ImplicitListSize))
-    PrintFatalError("implicit operand table does not fit in 10-bit offsets");
+  if (ImplicitListSize > (1U << 15))
+    PrintFatalError("implicit operand table does not fit in 15-bit offsets");
 
   {
     IfGuardEmitter IfGuard(
@@ -1008,8 +1019,8 @@ void InstrInfoEmitter::run(raw_ostream &OS) {
        << TargetName << "InstrTable::ImplicitOps + sizeof " << TargetName
        << "InstrTable::Padding) / sizeof(MCOperandInfo);\n";
     OS << "static_assert(" << TargetName << "OpInfoBase + " << OperandInfoSize
-       << " <= (1U << 15), "
-          "\"operand info table does not fit in 15-bit offsets\");\n\n";
+       << " <= (1U << 16), "
+          "\"operand info table does not fit in 16-bit offsets\");\n\n";
 
     OS << "extern const " << TargetName << "InstrTable " << TargetName
        << "Descs = {\n  {\n";
@@ -1029,11 +1040,17 @@ void InstrInfoEmitter::run(raw_ostream &OS) {
 
     OS << "  }, {\n";
 
-    // Emit all of the instruction's implicit uses and defs.
+    // Emit each implicit operand list. The first MCPhysReg stores the number of
+    // uses in its low six bits and the number of definitions in its next six
+    // bits.
     Timer.startTimer("Emit uses/defs");
-    for (auto &List : ImplicitLists) {
-      OS << "    /* " << EmittedLists[List] << " */";
-      for (auto &Reg : List)
+    for (const ImplicitListTy &List : ImplicitLists) {
+      unsigned NumImplicitUses = List.first;
+      unsigned NumImplicitDefs = List.second.size() - NumImplicitUses;
+      MCPhysReg Header = MCInstrDesc::TableGenEncoding::encodeImplicitHeader(
+          NumImplicitUses, NumImplicitDefs);
+      OS << "    /* " << EmittedLists[List] << " */ " << Header << ',';
+      for (const Record *Reg : List.second)
         OS << ' ' << getQualifiedName(Reg) << ',';
       OS << '\n';
     }
@@ -1286,10 +1303,11 @@ void InstrInfoEmitter::run(raw_ostream &OS) {
   EmitMapTable(Records, OS);
 }
 
-void InstrInfoEmitter::emitRecord(
-    const CodeGenInstruction &Inst, unsigned Num, const Record *InstrInfo,
-    std::map<std::vector<const Record *>, unsigned> &EmittedLists,
-    const OperandInfoMapTy &OperandInfoMap, raw_ostream &OS) {
+void InstrInfoEmitter::emitRecord(const CodeGenInstruction &Inst, unsigned Num,
+                                  const Record *InstrInfo,
+                                  ImplicitListMapTy &EmittedLists,
+                                  const OperandInfoMapTy &OperandInfoMap,
+                                  raw_ostream &OS) {
   int MinOperands = 0;
   if (!Inst.Operands.empty())
     // Each logical operand can be multiple MI operands.
@@ -1312,17 +1330,14 @@ void InstrInfoEmitter::emitRecord(
   if (DefOperands > MinOperands)
     PrintFatalError(Inst.TheDef,
                     "instruction definition count exceeds operand count");
-  if (!isUInt<5>(std::min(DefOperands, MinOperands - DefOperands)))
-    PrintFatalError(
-        Inst.TheDef,
-        "instruction must have at most 31 definitions or at most 31 "
-        "non-definitions");
-  if (Size < 0 || (Size >= 64 && (Size > 316 || Size % 4 != 0)))
+  if (!isUInt<8>(DefOperands))
     PrintFatalError(Inst.TheDef,
-                    "instruction size cannot be encoded in 7 bits");
-  if (!isUInt<13>(SchedClass))
+                    "instruction definition count does not fit in 8 bits");
+  if (!isUInt<8>(Size))
+    PrintFatalError(Inst.TheDef, "instruction size does not fit in 8 bits");
+  if (!isUInt<16>(SchedClass))
     PrintFatalError(Inst.TheDef,
-                    "instruction scheduling class does not fit in 13 bits");
+                    "instruction scheduling class does not fit in 16 bits");
   if (!isUInt<6>(Inst.ImplicitUses.size()) ||
       !isUInt<6>(Inst.ImplicitDefs.size()))
     PrintFatalError(Inst.TheDef,
@@ -1333,10 +1348,14 @@ void InstrInfoEmitter::emitRecord(
   // Collect the implicit use/def list.
   std::vector<const Record *> ImplicitOps = Inst.ImplicitUses;
   llvm::append_range(ImplicitOps, Inst.ImplicitDefs);
+  ImplicitListTy ImplicitList{Inst.ImplicitUses.size(), std::move(ImplicitOps)};
 
   OperandInfoTy OperandInfo = GetOperandInfo(Inst);
   unsigned OperandInfoOffset = OperandInfoMap.find(OperandInfo)->second;
-  unsigned ImplicitOffset = EmittedLists[ImplicitOps];
+  auto ImplicitListEntry = EmittedLists.find(ImplicitList);
+  if (ImplicitListEntry == EmittedLists.end())
+    PrintFatalError(Inst.TheDef, "missing implicit operand list");
+  unsigned ImplicitOffset = ImplicitListEntry->second;
 
   // Collect all of the target-independent flags.
   uint64_t Flags = 0;
@@ -1432,12 +1451,11 @@ void InstrInfoEmitter::emitRecord(
     PrintFatalError(Inst.TheDef, "Invalid TSFlags bit in " + Inst.getName());
 
   uint64_t FlagsAndImplicit =
-      MCInstrDesc::TableGenEncoding::encodeFlagsAndImplicit(
-          Flags, Size, ImplicitOffset, Inst.ImplicitDefs.size());
+      MCInstrDesc::TableGenEncoding::encodeFlagsAndImplicit(Flags, Size,
+                                                            ImplicitOffset);
   uint64_t OpcodeAndOperands =
       MCInstrDesc::TableGenEncoding::encodeOpcodeAndOperands(
-          Num, MinOperands, DefOperands, SchedClass, 0,
-          Inst.ImplicitUses.size());
+          Num, MinOperands, DefOperands, SchedClass, 0);
 
   OS << "    { MCInstrDesc::TableGenEncoding{}, 0x";
   OS.write_hex(*Value);

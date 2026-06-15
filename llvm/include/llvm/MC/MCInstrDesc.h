@@ -211,57 +211,50 @@ public:
   /// emitting the generated instruction table.
   struct TableGenEncoding {
     static constexpr unsigned FlagsShift = 0;
-    static constexpr unsigned SizeShift = 41;
-    static constexpr unsigned ImplicitOffsetShift = 48;
-    static constexpr unsigned NumImplicitDefsShift = 58;
+    static constexpr unsigned ImplicitOffsetShift = 41;
+    static constexpr unsigned SizeShift = 56;
 
     static constexpr unsigned OpcodeShift = 0;
     static constexpr unsigned NumOperandsShift = 16;
     static constexpr unsigned NumDefsShift = 24;
-    static constexpr unsigned SchedClassShift = 30;
-    static constexpr unsigned OpInfoOffsetShift = 43;
-    static constexpr unsigned NumImplicitUsesShift = 58;
+    static constexpr unsigned OpInfoOffsetShift = 32;
+    static constexpr unsigned SchedClassShift = 48;
+
+    static constexpr unsigned NumImplicitBits = 6;
+    static constexpr unsigned NumImplicitDefsShift = NumImplicitBits;
 
     static constexpr uint64_t mask(unsigned BitCount) {
       return (uint64_t(1) << BitCount) - 1;
     }
 
-    static constexpr unsigned encodeNumDefs(unsigned NumOperands,
-                                            unsigned NumDefs) {
-      unsigned NumNonDefs = NumOperands - NumDefs;
-      return NumDefs <= NumNonDefs ? NumDefs : (1U << 5) | NumNonDefs;
-    }
-
-    // Store sizes below 64 directly and larger sizes in four-byte units.
-    static constexpr unsigned encodeSize(unsigned Size) {
-      return Size < 64 ? Size : 64 + (Size - 64) / 4;
+    static constexpr MCPhysReg encodeImplicitHeader(unsigned NumImplicitUses,
+                                                    unsigned NumImplicitDefs) {
+      return NumImplicitUses | (NumImplicitDefs << NumImplicitDefsShift);
     }
 
     static constexpr uint64_t encodeFlagsAndImplicit(uint64_t Flags,
                                                      unsigned Size,
-                                                     unsigned ImplicitOffset,
-                                                     unsigned NumImplicitDefs) {
-      return (Flags << FlagsShift) | (uint64_t(encodeSize(Size)) << SizeShift) |
-             (uint64_t(ImplicitOffset) << ImplicitOffsetShift) |
-             (uint64_t(NumImplicitDefs) << NumImplicitDefsShift);
+                                                     unsigned ImplicitOffset) {
+      return (Flags << FlagsShift) | (uint64_t(Size) << SizeShift) |
+             (uint64_t(ImplicitOffset) << ImplicitOffsetShift);
     }
 
-    static constexpr uint64_t
-    encodeOpcodeAndOperands(unsigned Opcode, unsigned NumOperands,
-                            unsigned NumDefs, unsigned SchedClass,
-                            unsigned OpInfoOffset, unsigned NumImplicitUses) {
+    static constexpr uint64_t encodeOpcodeAndOperands(unsigned Opcode,
+                                                      unsigned NumOperands,
+                                                      unsigned NumDefs,
+                                                      unsigned SchedClass,
+                                                      unsigned OpInfoOffset) {
       return (uint64_t(Opcode) << OpcodeShift) |
              (uint64_t(NumOperands) << NumOperandsShift) |
-             (uint64_t(encodeNumDefs(NumOperands, NumDefs)) << NumDefsShift) |
+             (uint64_t(NumDefs) << NumDefsShift) |
              (uint64_t(SchedClass) << SchedClassShift) |
-             (uint64_t(OpInfoOffset) << OpInfoOffsetShift) |
-             (uint64_t(NumImplicitUses) << NumImplicitUsesShift);
+             (uint64_t(OpInfoOffset) << OpInfoOffsetShift);
     }
   };
 
 private:
-  static constexpr unsigned NumNonDefsFlag = 1U << 5;
-  static constexpr unsigned NumDefsCountMask = NumNonDefsFlag - 1;
+  static constexpr unsigned NumImplicitMask =
+      (1U << TableGenEncoding::NumImplicitBits) - 1;
 
   static constexpr uint64_t extract(uint64_t Value, unsigned Shift,
                                     unsigned BitCount) {
@@ -271,14 +264,18 @@ private:
   uint64_t FlagsAndImplicit;
   uint64_t OpcodeAndOperands;
 
-  unsigned getEncodedNumDefs() const {
-    return extract(OpcodeAndOperands, TableGenEncoding::NumDefsShift, 6);
-  }
   unsigned getOpInfoOffset() const {
-    return extract(OpcodeAndOperands, TableGenEncoding::OpInfoOffsetShift, 15);
+    return extract(OpcodeAndOperands, TableGenEncoding::OpInfoOffsetShift, 16);
   }
   unsigned getImplicitOffset() const {
-    return extract(FlagsAndImplicit, TableGenEncoding::ImplicitOffsetShift, 10);
+    return extract(FlagsAndImplicit, TableGenEncoding::ImplicitOffsetShift, 15);
+  }
+  /// Return the implicit operand list header. The low six bits contain the
+  /// number of uses and the next six bits contain the number of definitions.
+  const MCPhysReg *getImplicitList(unsigned ImplicitOffset) const {
+    assert(ImplicitOffset && "the empty implicit operand list has no header");
+    return reinterpret_cast<const MCPhysReg *>(this + getOpcode() + 1) +
+           ImplicitOffset;
   }
   bool hasFlag(unsigned Flag) const {
     return FlagsAndImplicit & (uint64_t(1) << Flag);
@@ -297,12 +294,15 @@ public:
                         uint8_t NumImplicitDefs = 0, uint16_t OpInfoOffset = 0,
                         uint16_t ImplicitOffset = 0, uint64_t Flags = 0,
                         uint64_t TSFlags = 0)
-      : MCInstrDesc(TableGenEncoding{}, TSFlags,
-                    TableGenEncoding::encodeFlagsAndImplicit(
-                        Flags, Size, ImplicitOffset, NumImplicitDefs),
-                    TableGenEncoding::encodeOpcodeAndOperands(
-                        Opcode, NumOperands, NumDefs, SchedClass, OpInfoOffset,
-                        NumImplicitUses)) {}
+      : MCInstrDesc(
+            TableGenEncoding{}, TSFlags,
+            TableGenEncoding::encodeFlagsAndImplicit(Flags, Size,
+                                                     ImplicitOffset),
+            TableGenEncoding::encodeOpcodeAndOperands(
+                Opcode, NumOperands, NumDefs, SchedClass, OpInfoOffset)) {
+    assert(NumImplicitUses == 0 && NumImplicitDefs == 0 &&
+           "standalone descriptors cannot have implicit operands");
+  }
 
   /// Returns the value of the specified operand constraint if
   /// it is present. Returns -1 if it is not present.
@@ -341,20 +341,25 @@ public:
   /// machine operand list.  This is the number of "outs" in the .td file,
   /// and does not include implicit defs.
   unsigned getNumDefs() const {
-    unsigned EncodedNumDefs = getEncodedNumDefs();
-    unsigned Count = EncodedNumDefs & NumDefsCountMask;
-    return EncodedNumDefs & NumNonDefsFlag ? getNumOperands() - Count : Count;
+    return extract(OpcodeAndOperands, TableGenEncoding::NumDefsShift, 8);
   }
 
   /// Return the number of implicitly used registers.
   unsigned getNumImplicitUses() const {
-    return extract(OpcodeAndOperands, TableGenEncoding::NumImplicitUsesShift,
-                   6);
+    unsigned ImplicitOffset = getImplicitOffset();
+    if (!ImplicitOffset)
+      return 0;
+    return *getImplicitList(ImplicitOffset) & NumImplicitMask;
   }
 
   /// Return the number of implicitly defined registers.
   unsigned getNumImplicitDefs() const {
-    return extract(FlagsAndImplicit, TableGenEncoding::NumImplicitDefsShift, 6);
+    unsigned ImplicitOffset = getImplicitOffset();
+    if (!ImplicitOffset)
+      return 0;
+    return (*getImplicitList(ImplicitOffset) >>
+            TableGenEncoding::NumImplicitDefsShift) &
+           NumImplicitMask;
   }
 
   /// Return flags of this instruction.
@@ -667,10 +672,12 @@ public:
   /// reading the flags.  Likewise, the variable shift instruction on X86 is
   /// marked as implicitly reading the 'CL' register, which it always does.
   ArrayRef<MCPhysReg> implicit_uses() const {
-    auto ImplicitOps =
-        reinterpret_cast<const MCPhysReg *>(this + getOpcode() + 1) +
-        getImplicitOffset();
-    return {ImplicitOps, getNumImplicitUses()};
+    unsigned ImplicitOffset = getImplicitOffset();
+    if (!ImplicitOffset)
+      return {};
+    const MCPhysReg *ImplicitList = getImplicitList(ImplicitOffset);
+    unsigned NumImplicitUses = *ImplicitList & NumImplicitMask;
+    return {ImplicitList + 1, NumImplicitUses};
   }
 
   /// Return a list of registers that are potentially written by any
@@ -682,10 +689,15 @@ public:
   /// registers.  For that instruction, this will return a list containing the
   /// EAX/EDX/EFLAGS registers.
   ArrayRef<MCPhysReg> implicit_defs() const {
-    auto ImplicitOps =
-        reinterpret_cast<const MCPhysReg *>(this + getOpcode() + 1) +
-        getImplicitOffset();
-    return {ImplicitOps + getNumImplicitUses(), getNumImplicitDefs()};
+    unsigned ImplicitOffset = getImplicitOffset();
+    if (!ImplicitOffset)
+      return {};
+    const MCPhysReg *ImplicitList = getImplicitList(ImplicitOffset);
+    unsigned Header = *ImplicitList++;
+    unsigned NumImplicitUses = Header & NumImplicitMask;
+    unsigned NumImplicitDefs =
+        (Header >> TableGenEncoding::NumImplicitDefsShift) & NumImplicitMask;
+    return {ImplicitList + NumImplicitUses, NumImplicitDefs};
   }
 
   /// Return true if this instruction implicitly
@@ -705,15 +717,13 @@ public:
   /// returns zero if there is no known scheduling information for the
   /// instruction.
   unsigned getSchedClass() const {
-    return extract(OpcodeAndOperands, TableGenEncoding::SchedClassShift, 13);
+    return extract(OpcodeAndOperands, TableGenEncoding::SchedClassShift, 16);
   }
 
   /// Return the number of bytes in the encoding of this instruction,
   /// or zero if the encoding size cannot be known from the opcode.
   unsigned getSize() const {
-    unsigned EncodedSize =
-        extract(FlagsAndImplicit, TableGenEncoding::SizeShift, 7);
-    return EncodedSize < 64 ? EncodedSize : 64 + (EncodedSize - 64) * 4;
+    return extract(FlagsAndImplicit, TableGenEncoding::SizeShift, 8);
   }
 
   /// Find the index of the first operand in the
