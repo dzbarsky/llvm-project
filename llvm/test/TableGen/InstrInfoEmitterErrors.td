@@ -10,11 +10,11 @@ def TestTarget : Target {
   let InstructionSet = TestInstrInfo;
 }
 
-// CHECK: error: instruction size cannot be encoded in 7 bits
+// CHECK: error: instruction size does not fit in 8 bits
 def InvalidSize : Instruction {
   let Namespace = "Test";
   let OutOperandList = (outs);
   let InOperandList = (ins);
   let AsmString = "";
-  let Size = 320;
+  let Size = 256;
 }

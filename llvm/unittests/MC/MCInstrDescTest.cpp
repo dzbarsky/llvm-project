@@ -21,9 +21,9 @@ TEST(MCInstrDescTest, PackedFields) {
 
   constexpr OperandCounts TestCounts[] = {
       {0, 0},   {1, 0},     {1, 1},    {33, 8},    {67, 65},
-      {130, 0}, {131, 129}, {255, 31}, {255, 224}, {255, 255}};
+      {130, 0}, {131, 129}, {255, 15}, {255, 240}, {255, 255}};
   for (OperandCounts Counts : TestCounts) {
-    for (unsigned Size : {0U, 2U, 3U, 4U, 63U, 64U, 252U, 316U}) {
+    for (unsigned Size : {0U, 2U, 3U, 4U, 63U, 64U, 252U, 255U}) {
       MCInstrDesc Desc(65535, Counts.NumOperands, Counts.NumDefs, Size, 8191,
                        63, 63, 32767, 1023, (1ULL << MCID::Authenticated) | 1,
                        UINT64_MAX);

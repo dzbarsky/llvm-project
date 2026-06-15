@@ -211,15 +211,15 @@ public:
   /// emitting the generated instruction table.
   struct TableGenEncoding {
     static constexpr unsigned FlagsShift = 0;
-    static constexpr unsigned SizeShift = 41;
-    static constexpr unsigned ImplicitOffsetShift = 48;
-    static constexpr unsigned NumImplicitDefsShift = 58;
+    static constexpr unsigned ImplicitOffsetShift = 41;
+    static constexpr unsigned SchedClassShift = 51;
 
     static constexpr unsigned OpcodeShift = 0;
     static constexpr unsigned NumOperandsShift = 16;
-    static constexpr unsigned NumDefsShift = 24;
-    static constexpr unsigned SchedClassShift = 30;
-    static constexpr unsigned OpInfoOffsetShift = 43;
+    static constexpr unsigned SizeShift = 24;
+    static constexpr unsigned NumDefsShift = 32;
+    static constexpr unsigned OpInfoOffsetShift = 37;
+    static constexpr unsigned NumImplicitDefsShift = 52;
     static constexpr unsigned NumImplicitUsesShift = 58;
 
     static constexpr uint64_t mask(unsigned BitCount) {
@@ -228,51 +228,51 @@ public:
 
     static constexpr unsigned encodeNumDefs(unsigned NumOperands,
                                             unsigned NumDefs) {
-      unsigned NumNonDefs = NumOperands - NumDefs;
-      return NumDefs <= NumNonDefs ? NumDefs : (1U << 5) | NumNonDefs;
+      return NumDefs < (1U << 4) ? NumDefs
+                                 : (1U << 4) | (NumOperands - NumDefs);
     }
 
-    // Store sizes below 64 directly and larger sizes in four-byte units.
-    static constexpr unsigned encodeSize(unsigned Size) {
-      return Size < 64 ? Size : 64 + (Size - 64) / 4;
-    }
-
-    static constexpr uint64_t encodeFlagsAndImplicit(uint64_t Flags,
-                                                     unsigned Size,
+    static constexpr uint64_t encodeFlagsAndSchedule(uint64_t Flags,
                                                      unsigned ImplicitOffset,
-                                                     unsigned NumImplicitDefs) {
-      return (Flags << FlagsShift) | (uint64_t(encodeSize(Size)) << SizeShift) |
+                                                     unsigned SchedClass) {
+      return (Flags << FlagsShift) |
              (uint64_t(ImplicitOffset) << ImplicitOffsetShift) |
-             (uint64_t(NumImplicitDefs) << NumImplicitDefsShift);
+             (uint64_t(SchedClass) << SchedClassShift);
     }
 
     static constexpr uint64_t
     encodeOpcodeAndOperands(unsigned Opcode, unsigned NumOperands,
-                            unsigned NumDefs, unsigned SchedClass,
-                            unsigned OpInfoOffset, unsigned NumImplicitUses) {
+                            unsigned NumDefs, unsigned Size,
+                            unsigned OpInfoOffset, unsigned NumImplicitUses,
+                            unsigned NumImplicitDefs) {
       return (uint64_t(Opcode) << OpcodeShift) |
              (uint64_t(NumOperands) << NumOperandsShift) |
+             (uint64_t(Size) << SizeShift) |
              (uint64_t(encodeNumDefs(NumOperands, NumDefs)) << NumDefsShift) |
-             (uint64_t(SchedClass) << SchedClassShift) |
              (uint64_t(OpInfoOffset) << OpInfoOffsetShift) |
+             (uint64_t(NumImplicitDefs) << NumImplicitDefsShift) |
              (uint64_t(NumImplicitUses) << NumImplicitUsesShift);
     }
   };
 
 private:
-  static constexpr unsigned NumNonDefsFlag = 1U << 5;
-  static constexpr unsigned NumDefsCountMask = NumNonDefsFlag - 1;
+  static constexpr unsigned NumNonDefsFlag = 1U << 4;
 
   static constexpr uint64_t extract(uint64_t Value, unsigned Shift,
                                     unsigned BitCount) {
     return (Value >> Shift) & TableGenEncoding::mask(BitCount);
   }
 
+  LLVM_ATTRIBUTE_NOINLINE static unsigned
+  decodeNumDefsFromNumNonDefs(unsigned NumOperands, unsigned EncodedNumDefs) {
+    return NumOperands - (EncodedNumDefs - NumNonDefsFlag);
+  }
+
   uint64_t FlagsAndImplicit;
   uint64_t OpcodeAndOperands;
 
   unsigned getEncodedNumDefs() const {
-    return extract(OpcodeAndOperands, TableGenEncoding::NumDefsShift, 6);
+    return extract(OpcodeAndOperands, TableGenEncoding::NumDefsShift, 5);
   }
   unsigned getOpInfoOffset() const {
     return extract(OpcodeAndOperands, TableGenEncoding::OpInfoOffsetShift, 15);
@@ -298,11 +298,11 @@ public:
                         uint16_t ImplicitOffset = 0, uint64_t Flags = 0,
                         uint64_t TSFlags = 0)
       : MCInstrDesc(TableGenEncoding{}, TSFlags,
-                    TableGenEncoding::encodeFlagsAndImplicit(
-                        Flags, Size, ImplicitOffset, NumImplicitDefs),
+                    TableGenEncoding::encodeFlagsAndSchedule(
+                        Flags, ImplicitOffset, SchedClass),
                     TableGenEncoding::encodeOpcodeAndOperands(
-                        Opcode, NumOperands, NumDefs, SchedClass, OpInfoOffset,
-                        NumImplicitUses)) {}
+                        Opcode, NumOperands, NumDefs, Size, OpInfoOffset,
+                        NumImplicitUses, NumImplicitDefs)) {}
 
   /// Returns the value of the specified operand constraint if
   /// it is present. Returns -1 if it is not present.
@@ -342,8 +342,9 @@ public:
   /// and does not include implicit defs.
   unsigned getNumDefs() const {
     unsigned EncodedNumDefs = getEncodedNumDefs();
-    unsigned Count = EncodedNumDefs & NumDefsCountMask;
-    return EncodedNumDefs & NumNonDefsFlag ? getNumOperands() - Count : Count;
+    if (LLVM_UNLIKELY(EncodedNumDefs >= NumNonDefsFlag))
+      return decodeNumDefsFromNumNonDefs(getNumOperands(), EncodedNumDefs);
+    return EncodedNumDefs;
   }
 
   /// Return the number of implicitly used registers.
@@ -354,7 +355,8 @@ public:
 
   /// Return the number of implicitly defined registers.
   unsigned getNumImplicitDefs() const {
-    return extract(FlagsAndImplicit, TableGenEncoding::NumImplicitDefsShift, 6);
+    return extract(OpcodeAndOperands, TableGenEncoding::NumImplicitDefsShift,
+                   6);
   }
 
   /// Return flags of this instruction.
@@ -705,15 +707,13 @@ public:
   /// returns zero if there is no known scheduling information for the
   /// instruction.
   unsigned getSchedClass() const {
-    return extract(OpcodeAndOperands, TableGenEncoding::SchedClassShift, 13);
+    return extract(FlagsAndImplicit, TableGenEncoding::SchedClassShift, 13);
   }
 
   /// Return the number of bytes in the encoding of this instruction,
   /// or zero if the encoding size cannot be known from the opcode.
   unsigned getSize() const {
-    unsigned EncodedSize =
-        extract(FlagsAndImplicit, TableGenEncoding::SizeShift, 7);
-    return EncodedSize < 64 ? EncodedSize : 64 + (EncodedSize - 64) * 4;
+    return extract(OpcodeAndOperands, TableGenEncoding::SizeShift, 8);
   }
 
   /// Find the index of the first operand in the

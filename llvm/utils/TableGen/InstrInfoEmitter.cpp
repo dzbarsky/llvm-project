@@ -1312,14 +1312,13 @@ void InstrInfoEmitter::emitRecord(
   if (DefOperands > MinOperands)
     PrintFatalError(Inst.TheDef,
                     "instruction definition count exceeds operand count");
-  if (!isUInt<5>(std::min(DefOperands, MinOperands - DefOperands)))
+  if (!isUInt<4>(std::min(DefOperands, MinOperands - DefOperands)))
     PrintFatalError(
         Inst.TheDef,
-        "instruction must have at most 31 definitions or at most 31 "
+        "instruction must have at most 15 definitions or at most 15 "
         "non-definitions");
-  if (Size < 0 || (Size >= 64 && (Size > 316 || Size % 4 != 0)))
-    PrintFatalError(Inst.TheDef,
-                    "instruction size cannot be encoded in 7 bits");
+  if (Size < 0 || !isUInt<8>(Size))
+    PrintFatalError(Inst.TheDef, "instruction size does not fit in 8 bits");
   if (!isUInt<13>(SchedClass))
     PrintFatalError(Inst.TheDef,
                     "instruction scheduling class does not fit in 13 bits");
@@ -1432,12 +1431,12 @@ void InstrInfoEmitter::emitRecord(
     PrintFatalError(Inst.TheDef, "Invalid TSFlags bit in " + Inst.getName());
 
   uint64_t FlagsAndImplicit =
-      MCInstrDesc::TableGenEncoding::encodeFlagsAndImplicit(
-          Flags, Size, ImplicitOffset, Inst.ImplicitDefs.size());
+      MCInstrDesc::TableGenEncoding::encodeFlagsAndSchedule(
+          Flags, ImplicitOffset, SchedClass);
   uint64_t OpcodeAndOperands =
       MCInstrDesc::TableGenEncoding::encodeOpcodeAndOperands(
-          Num, MinOperands, DefOperands, SchedClass, 0,
-          Inst.ImplicitUses.size());
+          Num, MinOperands, DefOperands, Size, 0, Inst.ImplicitUses.size(),
+          Inst.ImplicitDefs.size());
 
   OS << "    { MCInstrDesc::TableGenEncoding{}, 0x";
   OS.write_hex(*Value);
